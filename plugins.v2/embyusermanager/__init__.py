@@ -1048,21 +1048,9 @@ class EmbyUserManager(_PluginBase):
                 if self._scheduler.running:
                     self._scheduler.shutdown()
                 self._scheduler = None
+            logger.info("Emby用户管理器已停止")
         except Exception as e:
-            logger.error(f"停止服务失败: {str(e)}"),
-                "used_by_emby_username": None,
-                "used_at": None
-            }
-            self._save_data()
-        
-        message = (
-            f"✅ 激活码生成成功！\n\n"
-            f"激活码: `{token}`\n"
-            f"有效天数: {days}天\n"
-            f"状态: 未使用\n\n"
-            f"用户使用方式: /register {token}"
-        )
-        self._send_message(admin_id, message)
+            logger.error(f"停止服务失败: {str(e)}")
 
     def _handle_token_list(self, admin_id: str):
         """查看激活码列表（管理员）"""
@@ -1106,4 +1094,17 @@ class EmbyUserManager(_PluginBase):
                 "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "days": days,
                 "status": "unused",
-                "used_by_tg_id": None
+                "used_by_tg_id": None,
+                "used_by_emby_username": None,
+                "used_at": None
+            }
+            self._save_data()
+        
+        message = (
+            f"✅ 续期码生成成功！\n\n"
+            f"续期码: `{token}`\n"
+            f"续期天数: {days}天\n"
+            f"状态: 未使用\n\n"
+            f"用户使用方式: /renew {token}"
+        )
+        self._send_message(admin_id, message)
