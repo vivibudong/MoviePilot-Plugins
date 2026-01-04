@@ -2,6 +2,7 @@ import datetime
 from pathlib import Path
 from threading import Lock
 from typing import Optional, Any, List, Dict, Tuple
+from app.schemas.types import MediaType, EventType, SystemConfigKey, NotificationType
 
 import pytz
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -35,7 +36,7 @@ class DoubanHaixiangkan(_PluginBase):
     # 插件图标
     plugin_icon = "douban.png"
     # 插件版本
-    plugin_version = "0.2"
+    plugin_version = "0.2.1"
     # 插件作者
     plugin_author = "jxxghp,dwhmofly,Vivi"
     # 作者主页
@@ -723,9 +724,9 @@ class DoubanHaixiangkan(_PluginBase):
                                         # 发送下载通知
                                         if self._notify:
                                             self.post_message(
-                                                mtype=mediainfo.type,
-                                                title=f"{username} 下载了{mediainfo.type.value} {mediainfo.title_year}",
-                                                text=f"来自豆瓣想看同步",
+                                                mtype=NotificationType.Manual,
+                                                title=f"{username} 想看{mediainfo.type.value} {mediainfo.title_year}，已添加订阅，等待入库。",
+                                                text=f"来自豆瓣还想看同步",
                                                 image=mediainfo.get_poster_image()
                                             )
                                 else:
@@ -753,9 +754,9 @@ class DoubanHaixiangkan(_PluginBase):
                                         # 发送下载通知
                                         if self._notify:
                                             self.post_message(
-                                                mtype=mediainfo.type,
-                                                title=f"{username} 下载了{mediainfo.type.value} {mediainfo.title_year}",
-                                                text=f"来自豆瓣想看同步",
+                                                mtype=NotificationType.Manual,
+                                                title=f"{username} 订阅了{mediainfo.type.value} {mediainfo.title_year}，等待入库。",
+                                                text=f"来自豆瓣还想看同步",
                                                 image=mediainfo.get_poster_image()
                                             )
 
@@ -771,7 +772,7 @@ class DoubanHaixiangkan(_PluginBase):
                         # 发送订阅通知
                         if action == "subscribe" and self._notify:
                             self.post_message(
-                                mtype=mediainfo.type,
+                                mtype=NotificationType.Manual,
                                 title=f"{username} 订阅了{mediainfo.type.value} {mediainfo.title_year}",
                                 text=f"年份：{mediainfo.year}\n简介：{mediainfo.overview[:100] if mediainfo.overview else '暂无'}",
                                 image=mediainfo.get_poster_image()
