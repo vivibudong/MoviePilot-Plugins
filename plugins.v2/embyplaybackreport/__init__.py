@@ -18,11 +18,11 @@ class EmbyPlaybackReport(_PluginBase):
     # 插件名称
     plugin_name = "Emby观影报告推送"
     # 插件描述
-    plugin_desc = "定期统计Emby观影数据并推送通知报告"
+    plugin_desc = "定期统计Emby观影数据并推送通知报告，支持每日/每周/每月多维度统计"
     # 插件图标
     plugin_icon = "Emby_A.png"
     # 插件版本
-    plugin_version = "0.1"
+    plugin_version = "0.2"
     # 插件作者
     plugin_author = "Vivi"
     # 作者主页
@@ -37,11 +37,24 @@ class EmbyPlaybackReport(_PluginBase):
     # 私有属性
     _enabled = False
     _onlyonce = False
-    _cron = None
-    _report_type = "daily"
     _emby_host = None
     _emby_token = None
-    _notify = True
+    
+    # 每日报告设置
+    _daily_enabled = False
+    _daily_cron = None
+    _daily_reports = []
+    
+    # 每周报告设置
+    _weekly_enabled = False
+    _weekly_cron = None
+    _weekly_reports = []
+    
+    # 每月报告设置
+    _monthly_enabled = False
+    _monthly_cron = None
+    _monthly_reports = []
+    
     _scheduler: Optional[BackgroundScheduler] = None
 
     def init_plugin(self, config: dict = None):
@@ -49,11 +62,23 @@ class EmbyPlaybackReport(_PluginBase):
         if config:
             self._enabled = config.get("enabled", False)
             self._onlyonce = config.get("onlyonce", False)
-            self._cron = config.get("cron", "0 9 * * *")
-            self._report_type = config.get("report_type", "daily")
             self._emby_host = config.get("emby_host", "")
             self._emby_token = config.get("emby_token", "")
-            self._notify = config.get("notify", True)
+            
+            # 每日报告配置
+            self._daily_enabled = config.get("daily_enabled", False)
+            self._daily_cron = config.get("daily_cron", "0 9 * * *")
+            self._daily_reports = config.get("daily_reports", [])
+            
+            # 每周报告配置
+            self._weekly_enabled = config.get("weekly_enabled", False)
+            self._weekly_cron = config.get("weekly_cron", "0 9 * * 1")
+            self._weekly_reports = config.get("weekly_reports", [])
+            
+            # 每月报告配置
+            self._monthly_enabled = config.get("monthly_enabled", False)
+            self._monthly_cron = config.get("monthly_cron", "0 9 1 * *")
+            self._monthly_reports = config.get("monthly_reports", [])
 
         # 停止现有任务
         self.stop_service()
@@ -65,38 +90,74 @@ class EmbyPlaybackReport(_PluginBase):
             if self._onlyonce:
                 logger.info("Emby观影报告服务启动，立即运行一次")
                 self._scheduler.add_job(
-                    func=self.report,
+                    func=self.run_all_reports,
                     trigger='date',
                     run_date=datetime.now(tz=pytz.timezone(settings.TZ)) + timedelta(seconds=3),
-                    name="Emby观影报告"
+                    name="Emby观影报告-立即执行"
                 )
                 # 关闭一次性开关
                 self._onlyonce = False
-                self.update_config({
-                    "enabled": self._enabled,
-                    "onlyonce": False,
-                    "cron": self._cron,
-                    "report_type": self._report_type,
-                    "emby_host": self._emby_host,
-                    "emby_token": self._emby_token,
-                    "notify": self._notify
-                })
+                self._save_config()
 
-            if self._enabled and self._cron:
-                try:
-                    self._scheduler.add_job(
-                        func=self.report,
-                        trigger=CronTrigger.from_crontab(self._cron),
-                        name="Emby观影报告"
-                    )
-                except Exception as err:
-                    logger.error(f"定时任务配置错误：{err}")
-                    self.systemmessage.put(f"Emby观影报告定时任务配置错误：{err}")
+            if self._enabled:
+                # 添加每日报告任务
+                if self._daily_enabled and self._daily_cron:
+                    try:
+                        self._scheduler.add_job(
+                            func=self.report,
+                            trigger=CronTrigger.from_crontab(self._daily_cron),
+                            args=["daily"],
+                            name="Emby观影报告-每日"
+                        )
+                    except Exception as err:
+                        logger.error(f"每日报告定时任务配置错误：{err}")
+
+                # 添加每周报告任务
+                if self._weekly_enabled and self._weekly_cron:
+                    try:
+                        self._scheduler.add_job(
+                            func=self.report,
+                            trigger=CronTrigger.from_crontab(self._weekly_cron),
+                            args=["weekly"],
+                            name="Emby观影报告-每周"
+                        )
+                    except Exception as err:
+                        logger.error(f"每周报告定时任务配置错误：{err}")
+
+                # 添加每月报告任务
+                if self._monthly_enabled and self._monthly_cron:
+                    try:
+                        self._scheduler.add_job(
+                            func=self.report,
+                            trigger=CronTrigger.from_crontab(self._monthly_cron),
+                            args=["monthly"],
+                            name="Emby观影报告-每月"
+                        )
+                    except Exception as err:
+                        logger.error(f"每月报告定时任务配置错误：{err}")
 
             if self._scheduler.get_jobs():
                 # 启动服务
                 self._scheduler.print_jobs()
                 self._scheduler.start()
+
+    def _save_config(self):
+        """保存配置"""
+        self.update_config({
+            "enabled": self._enabled,
+            "onlyonce": False,
+            "emby_host": self._emby_host,
+            "emby_token": self._emby_token,
+            "daily_enabled": self._daily_enabled,
+            "daily_cron": self._daily_cron,
+            "daily_reports": self._daily_reports,
+            "weekly_enabled": self._weekly_enabled,
+            "weekly_cron": self._weekly_cron,
+            "weekly_reports": self._weekly_reports,
+            "monthly_enabled": self._monthly_enabled,
+            "monthly_cron": self._monthly_cron,
+            "monthly_reports": self._monthly_reports
+        })
 
     def get_state(self) -> bool:
         """获取插件状态"""
@@ -104,35 +165,41 @@ class EmbyPlaybackReport(_PluginBase):
 
     @staticmethod
     def get_command() -> List[Dict[str, Any]]:
-        """
-        定义远程控制命令
-        :return: 命令关键字、事件、描述、附带数据
-        """
+        """定义远程控制命令"""
         pass
 
     def get_api(self) -> List[Dict[str, Any]]:
-        """
-        获取插件API
-        """
+        """获取插件API"""
         pass
 
     def get_form(self) -> Tuple[List[dict], Dict[str, Any]]:
-        """
-        拼装插件配置页面，需要返回两块数据：1、页面配置；2、数据结构
-        """
+        """拼装插件配置页面"""
+        # 报告类型选项
+        report_options = [
+            {'title': '📊 总播放时长', 'value': 'total_duration'},
+            {'title': '▶️ 总观看次数', 'value': 'total_count'},
+            {'title': '📺 内容类型排行', 'value': 'type_ranking'},
+            {'title': '👥 活跃用户排行TOP5', 'value': 'user_ranking'},
+            {'title': '🔥 热门媒体榜单TOP10', 'value': 'hot_media'},
+            {'title': '📱 最受欢迎客户端', 'value': 'popular_client'},
+            {'title': '🆕 新增媒体统计', 'value': 'new_media'},
+            {'title': '❄️ 冷门媒体提醒(>30天无观看)', 'value': 'cold_media'},
+            {'title': '⚠️ 异常用户告警', 'value': 'abnormal_user'},
+            {'title': '📈 观影趋势分析', 'value': 'trend_analysis'},
+            {'title': '⏰ 观影时段分布', 'value': 'time_distribution'}
+        ]
+
         return [
             {
                 'component': 'VForm',
                 'content': [
+                    # 基础设置
                     {
                         'component': 'VRow',
                         'content': [
                             {
                                 'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 4
-                                },
+                                'props': {'cols': 12, 'md': 4},
                                 'content': [
                                     {
                                         'component': 'VSwitch',
@@ -145,26 +212,7 @@ class EmbyPlaybackReport(_PluginBase):
                             },
                             {
                                 'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 4
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VSwitch',
-                                        'props': {
-                                            'model': 'notify',
-                                            'label': '发送通知',
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 4
-                                },
+                                'props': {'cols': 12, 'md': 4},
                                 'content': [
                                     {
                                         'component': 'VSwitch',
@@ -182,10 +230,7 @@ class EmbyPlaybackReport(_PluginBase):
                         'content': [
                             {
                                 'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 6
-                                },
+                                'props': {'cols': 12, 'md': 6},
                                 'content': [
                                     {
                                         'component': 'VTextField',
@@ -193,91 +238,272 @@ class EmbyPlaybackReport(_PluginBase):
                                             'model': 'emby_host',
                                             'label': 'Emby服务器地址',
                                             'placeholder': 'https://emby.example.com',
-                                            'hint': '只需填写主域名，如：https://emby.vvapi.de'
+                                            'hint': '只需填写主域名'
                                         }
                                     }
                                 ]
                             },
                             {
                                 'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 6
-                                },
+                                'props': {'cols': 12, 'md': 6},
                                 'content': [
                                     {
                                         'component': 'VTextField',
                                         'props': {
                                             'model': 'emby_token',
                                             'label': 'Emby API Token',
-                                            'placeholder': '输入API密钥',
-                                            'hint': '用于访问Emby API的令牌'
+                                            'placeholder': '输入API密钥'
                                         }
                                     }
                                 ]
                             }
                         ]
                     },
+                    
+                    # 每日报告设置
                     {
                         'component': 'VRow',
                         'content': [
                             {
                                 'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 6
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VSelect',
-                                        'props': {
-                                            'model': 'report_type',
-                                            'label': '报告类型',
-                                            'items': [
-                                                {'title': '每日报告', 'value': 'daily'},
-                                                {'title': '每周报告', 'value': 'weekly'},
-                                                {'title': '每月报告', 'value': 'monthly'}
-                                            ]
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 6
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VTextField',
-                                        'props': {
-                                            'model': 'cron',
-                                            'label': '执行周期',
-                                            'placeholder': '0 9 * * *',
-                                            'hint': 'Cron表达式，默认每天9点执行'
-                                        }
-                                    }
-                                ]
-                            }
-                        ]
-                    },
-                    {
-                        'component': 'VRow',
-                        'content': [
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                },
+                                'props': {'cols': 12},
                                 'content': [
                                     {
                                         'component': 'VAlert',
                                         'props': {
                                             'type': 'info',
                                             'variant': 'tonal',
-                                            'text': '插件通过Emby的Playback Reporting插件统计观影数据。'
-                                                    '需要确保Emby服务器已安装并启用该插件。'
+                                            'text': '📅 每日报告设置',
+                                            'style': 'margin-top: 12px;'
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12, 'md': 3},
+                                'content': [
+                                    {
+                                        'component': 'VSwitch',
+                                        'props': {
+                                            'model': 'daily_enabled',
+                                            'label': '启用每日报告',
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12, 'md': 9},
+                                'content': [
+                                    {
+                                        'component': 'VCronField',
+                                        'props': {
+                                            'model': 'daily_cron',
+                                            'label': '执行周期',
+                                            'placeholder': '默认每天9点执行'
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12},
+                                'content': [
+                                    {
+                                        'component': 'VSelect',
+                                        'props': {
+                                            'model': 'daily_reports',
+                                            'label': '报告内容',
+                                            'items': report_options,
+                                            'multiple': True,
+                                            'chips': True,
+                                            'hint': '选择需要包含的报告内容'
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    
+                    # 每周报告设置
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12},
+                                'content': [
+                                    {
+                                        'component': 'VAlert',
+                                        'props': {
+                                            'type': 'success',
+                                            'variant': 'tonal',
+                                            'text': '📊 每周报告设置',
+                                            'style': 'margin-top: 12px;'
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12, 'md': 3},
+                                'content': [
+                                    {
+                                        'component': 'VSwitch',
+                                        'props': {
+                                            'model': 'weekly_enabled',
+                                            'label': '启用每周报告',
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12, 'md': 9},
+                                'content': [
+                                    {
+                                        'component': 'VCronField',
+                                        'props': {
+                                            'model': 'weekly_cron',
+                                            'label': '执行周期',
+                                            'placeholder': '默认每周一9点执行'
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12},
+                                'content': [
+                                    {
+                                        'component': 'VSelect',
+                                        'props': {
+                                            'model': 'weekly_reports',
+                                            'label': '报告内容',
+                                            'items': report_options,
+                                            'multiple': True,
+                                            'chips': True,
+                                            'hint': '选择需要包含的报告内容'
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    
+                    # 每月报告设置
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12},
+                                'content': [
+                                    {
+                                        'component': 'VAlert',
+                                        'props': {
+                                            'type': 'warning',
+                                            'variant': 'tonal',
+                                            'text': '📈 每月报告设置',
+                                            'style': 'margin-top: 12px;'
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12, 'md': 3},
+                                'content': [
+                                    {
+                                        'component': 'VSwitch',
+                                        'props': {
+                                            'model': 'monthly_enabled',
+                                            'label': '启用每月报告',
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12, 'md': 9},
+                                'content': [
+                                    {
+                                        'component': 'VCronField',
+                                        'props': {
+                                            'model': 'monthly_cron',
+                                            'label': '执行周期',
+                                            'placeholder': '默认每月1号9点执行'
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12},
+                                'content': [
+                                    {
+                                        'component': 'VSelect',
+                                        'props': {
+                                            'model': 'monthly_reports',
+                                            'label': '报告内容',
+                                            'items': report_options,
+                                            'multiple': True,
+                                            'chips': True,
+                                            'hint': '选择需要包含的报告内容'
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    
+                    # 说明
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12},
+                                'content': [
+                                    {
+                                        'component': 'VAlert',
+                                        'props': {
+                                            'type': 'info',
+                                            'variant': 'tonal',
+                                            'style': 'margin-top: 12px;',
+                                            'text': '💡 提示：插件通过Emby的Playback Reporting插件统计数据。'
+                                                    '异常用户检测基于播放行为分析，保护用户隐私，不记录IP地址。'
                                         }
                                     }
                                 ]
@@ -288,24 +514,26 @@ class EmbyPlaybackReport(_PluginBase):
             }
         ], {
             "enabled": False,
-            "notify": True,
             "onlyonce": False,
-            "cron": "0 9 * * *",
-            "report_type": "daily",
             "emby_host": "",
-            "emby_token": ""
+            "emby_token": "",
+            "daily_enabled": False,
+            "daily_cron": "0 9 * * *",
+            "daily_reports": ["total_duration", "total_count", "type_ranking"],
+            "weekly_enabled": False,
+            "weekly_cron": "0 9 * * 1",
+            "weekly_reports": ["total_duration", "total_count", "user_ranking", "hot_media"],
+            "monthly_enabled": False,
+            "monthly_cron": "0 9 1 * *",
+            "monthly_reports": ["total_duration", "total_count", "user_ranking", "hot_media", "new_media", "trend_analysis"]
         }
 
     def get_page(self) -> List[dict]:
-        """
-        拼装插件详情页面，需要返回页面配置，同时附带数据
-        """
+        """拼装插件详情页面"""
         pass
 
     def stop_service(self):
-        """
-        退出插件
-        """
+        """退出插件"""
         try:
             if self._scheduler:
                 self._scheduler.remove_all_jobs()
@@ -315,79 +543,102 @@ class EmbyPlaybackReport(_PluginBase):
         except Exception as e:
             logger.error(f"退出插件失败：{str(e)}")
 
-    def report(self):
-        """
-        生成并推送观影报告
-        """
+    def run_all_reports(self):
+        """立即执行所有启用的报告"""
+        if self._daily_enabled:
+            self.report("daily")
+        if self._weekly_enabled:
+            self.report("weekly")
+        if self._monthly_enabled:
+            self.report("monthly")
+
+    def report(self, report_type: str):
+        """生成并推送观影报告"""
         if not self._emby_host or not self._emby_token:
             logger.error("Emby服务器地址或API Token未配置")
             return
 
-        logger.info("开始生成Emby观影报告...")
+        # 获取对应类型的报告配置
+        if report_type == "daily":
+            report_items = self._daily_reports
+            period_text = "昨日"
+            days = 1
+        elif report_type == "weekly":
+            report_items = self._weekly_reports
+            period_text = "本周"
+            days = 7
+        else:  # monthly
+            report_items = self._monthly_reports
+            period_text = "本月"
+            days = 30
+
+        if not report_items:
+            logger.warning(f"{period_text}报告未配置任何内容")
+            return
+
+        logger.info(f"开始生成{period_text}Emby观影报告...")
 
         try:
-            # 获取时间范围
             end_date = datetime.now()
-            if self._report_type == "daily":
-                start_date = end_date - timedelta(days=1)
-                period_text = "昨日"
-            elif self._report_type == "weekly":
-                start_date = end_date - timedelta(days=7)
-                period_text = "本周"
-            else:  # monthly
-                start_date = end_date - timedelta(days=30)
-                period_text = "本月"
+            start_date = end_date - timedelta(days=days)
 
-            # 查询观影数据
-            stats = self._query_playback_stats(start_date, end_date)
+            # 生成报告内容
+            report_text = f"📅 {period_text}观影报告\n"
+            report_text += f"统计周期：{start_date.strftime('%Y-%m-%d')} ~ {end_date.strftime('%Y-%m-%d')}\n"
+            report_text += "=" * 40 + "\n\n"
 
-            if stats:
-                # 生成报告文本
-                report_text = self._generate_report_text(stats, period_text, start_date, end_date)
+            # 根据配置生成各项报告
+            for item in report_items:
+                section = self._generate_report_section(item, start_date, end_date, days)
+                if section:
+                    report_text += section + "\n"
 
-                # 发送通知
-                if self._notify:
-                    self.post_message(
-                        mtype=NotificationType.MediaServer,
-                        title=f"📊 Emby{period_text}观影报告",
-                        text=report_text
-                    )
-                
-                logger.info(f"Emby观影报告生成成功：{period_text}")
-            else:
-                logger.warning("未获取到观影数据")
+            # 发送通知
+            self.post_message(
+                mtype=NotificationType.MediaServer,
+                title=f"📊 Emby{period_text}观影报告",
+                text=report_text
+            )
+            
+            logger.info(f"{period_text}观影报告生成成功")
 
         except Exception as e:
-            logger.error(f"生成观影报告失败：{str(e)}")
+            logger.error(f"生成{period_text}观影报告失败：{str(e)}")
 
-    def _query_playback_stats(self, start_date: datetime, end_date: datetime) -> Optional[Dict]:
-        """
-        查询Emby播放统计数据
-        """
-        # 构建完整的API URL
+    def _generate_report_section(self, item_type: str, start: datetime, end: datetime, days: int) -> str:
+        """生成报告的各个部分"""
+        try:
+            if item_type == "total_duration":
+                return self._get_total_duration(start, end)
+            elif item_type == "total_count":
+                return self._get_total_count(start, end)
+            elif item_type == "type_ranking":
+                return self._get_type_ranking(start, end)
+            elif item_type == "user_ranking":
+                return self._get_user_ranking(start, end)
+            elif item_type == "hot_media":
+                return self._get_hot_media(start, end)
+            elif item_type == "popular_client":
+                return self._get_popular_client(start, end)
+            elif item_type == "new_media":
+                return self._get_new_media(start, end)
+            elif item_type == "cold_media":
+                return self._get_cold_media()
+            elif item_type == "abnormal_user":
+                return self._get_abnormal_users(start, end)
+            elif item_type == "trend_analysis":
+                return self._get_trend_analysis(start, end, days)
+            elif item_type == "time_distribution":
+                return self._get_time_distribution(start, end)
+        except Exception as e:
+            logger.error(f"生成报告部分 {item_type} 失败：{str(e)}")
+            return ""
+
+    def _query_emby(self, query: str) -> Optional[Dict]:
+        """查询Emby数据库"""
         api_url = f"{self._emby_host.rstrip('/')}/emby/user_usage_stats/submit_custom_query"
         
-        # 格式化日期
-        start_str = start_date.strftime("%Y-%m-%d 00:00:00")
-        end_str = end_date.strftime("%Y-%m-%d 23:59:59")
-
-        # SQL查询语句
-        query = f"""
-        SELECT 
-            COUNT(DISTINCT UserId) as user_count,
-            COUNT(*) as play_count,
-            SUM(PlayDuration) as total_duration,
-            ItemType,
-            ItemName
-        FROM PlaybackActivity 
-        WHERE DateCreated >= '{start_str}' 
-        AND DateCreated <= '{end_str}'
-        GROUP BY ItemType
-        ORDER BY play_count DESC
-        """
-
         try:
-            # 发送POST请求
             headers = {
                 "X-Emby-Token": self._emby_token,
                 "Content-Type": "application/json"
@@ -401,66 +652,256 @@ class EmbyPlaybackReport(_PluginBase):
             )
             
             if response.status_code == 200:
-                result = response.json()
-                logger.info(f"成功获取观影数据：{len(result.get('results', []))} 条记录")
-                return result
+                return response.json()
             else:
-                logger.error(f"API请求失败：{response.status_code} - {response.text}")
+                logger.error(f"API请求失败：{response.status_code}")
                 return None
 
         except Exception as e:
-            logger.error(f"查询观影数据失败：{str(e)}")
+            logger.error(f"查询数据失败：{str(e)}")
             return None
 
-    def _generate_report_text(self, stats: Dict, period: str, start: datetime, end: datetime) -> str:
+    def _get_total_duration(self, start: datetime, end: datetime) -> str:
+        """获取总播放时长"""
+        query = f"""
+        SELECT SUM(PlayDuration) as total_duration
+        FROM PlaybackActivity 
+        WHERE DateCreated >= '{start.strftime("%Y-%m-%d 00:00:00")}' 
+        AND DateCreated <= '{end.strftime("%Y-%m-%d 23:59:59")}'
         """
-        生成报告文本
+        result = self._query_emby(query)
+        if result and result.get("results"):
+            duration = float(result["results"][0][0] or 0)
+            hours = duration / 3600
+            return f"⏱️ 总播放时长：{hours:.1f} 小时"
+        return ""
+
+    def _get_total_count(self, start: datetime, end: datetime) -> str:
+        """获取总观看次数"""
+        query = f"""
+        SELECT COUNT(*) as total_count
+        FROM PlaybackActivity 
+        WHERE DateCreated >= '{start.strftime("%Y-%m-%d 00:00:00")}' 
+        AND DateCreated <= '{end.strftime("%Y-%m-%d 23:59:59")}'
         """
-        results = stats.get("results", [])
-        
-        if not results:
-            return f"{period}暂无观影记录"
+        result = self._query_emby(query)
+        if result and result.get("results"):
+            count = int(result["results"][0][0] or 0)
+            return f"▶️ 总观看次数：{count} 次"
+        return ""
 
-        # 统计总数据
-        total_plays = 0
-        total_duration = 0
-        type_stats = {}
+    def _get_type_ranking(self, start: datetime, end: datetime) -> str:
+        """获取内容类型排行"""
+        query = f"""
+        SELECT ItemType, COUNT(*) as count, SUM(PlayDuration) as duration
+        FROM PlaybackActivity 
+        WHERE DateCreated >= '{start.strftime("%Y-%m-%d 00:00:00")}' 
+        AND DateCreated <= '{end.strftime("%Y-%m-%d 23:59:59")}'
+        GROUP BY ItemType
+        ORDER BY count DESC
+        """
+        result = self._query_emby(query)
+        if result and result.get("results"):
+            text = "📺 内容类型排行：\n"
+            for item in result["results"][:5]:
+                item_type = item[0] or "Unknown"
+                count = int(item[1] or 0)
+                duration = float(item[2] or 0) / 3600
+                text += f"  · {item_type}：{count}次 ({duration:.1f}小时)\n"
+            return text.rstrip()
+        return ""
 
-        for item in results:
-            if len(item) >= 5:
-                # 确保类型转换为数值
-                try:
-                    plays = int(item[1]) if item[1] else 0
-                except (ValueError, TypeError):
-                    plays = 0
-                
-                try:
-                    duration = float(item[2]) if item[2] else 0
-                except (ValueError, TypeError):
-                    duration = 0
-                
-                item_type = str(item[3]) if item[3] else "Unknown"
-                
-                total_plays += plays
-                total_duration += duration
-                
-                if item_type not in type_stats:
-                    type_stats[item_type] = {"count": 0, "duration": 0}
-                type_stats[item_type]["count"] += plays
-                type_stats[item_type]["duration"] += duration
+    def _get_user_ranking(self, start: datetime, end: datetime) -> str:
+        """获取活跃用户排行TOP5"""
+        query = f"""
+        SELECT UserName, COUNT(*) as play_count, SUM(PlayDuration) as total_duration
+        FROM PlaybackActivity 
+        WHERE DateCreated >= '{start.strftime("%Y-%m-%d 00:00:00")}' 
+        AND DateCreated <= '{end.strftime("%Y-%m-%d 23:59:59")}'
+        GROUP BY UserName
+        ORDER BY total_duration DESC
+        LIMIT 5
+        """
+        result = self._query_emby(query)
+        if result and result.get("results"):
+            text = "👥 活跃用户TOP5：\n"
+            for idx, item in enumerate(result["results"], 1):
+                username = item[0] or "Unknown"
+                play_count = int(item[1] or 0)
+                duration = float(item[2] or 0) / 3600
+                medal = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"][idx-1]
+                text += f"  {medal} {username}：{play_count}次 ({duration:.1f}小时)\n"
+            return text.rstrip()
+        return ""
 
-        # 转换时长为小时
-        hours = total_duration / 3600 if total_duration > 0 else 0
+    def _get_hot_media(self, start: datetime, end: datetime) -> str:
+        """获取热门媒体榜单TOP10"""
+        query = f"""
+        SELECT ItemName, ItemType, COUNT(DISTINCT UserId) as user_count, 
+               COUNT(*) as play_count, SUM(PlayDuration) as duration
+        FROM PlaybackActivity 
+        WHERE DateCreated >= '{start.strftime("%Y-%m-%d 00:00:00")}' 
+        AND DateCreated <= '{end.strftime("%Y-%m-%d 23:59:59")}'
+        GROUP BY ItemName, ItemType
+        ORDER BY user_count DESC, play_count DESC
+        LIMIT 10
+        """
+        result = self._query_emby(query)
+        if result and result.get("results"):
+            text = "🔥 热门媒体TOP10：\n"
+            for idx, item in enumerate(result["results"], 1):
+                name = item[0] or "Unknown"
+                item_type = item[1] or ""
+                user_count = int(item[2] or 0)
+                play_count = int(item[3] or 0)
+                duration = float(item[4] or 0) / 3600
+                text += f"  {idx}. {name} [{item_type}]\n"
+                text += f"     {user_count}人观看 | {play_count}次播放 | {duration:.1f}小时\n"
+            return text.rstrip()
+        return ""
 
-        # 构建报告文本
-        report = f"📅 统计周期：{start.strftime('%Y-%m-%d')} ~ {end.strftime('%Y-%m-%d')}\n\n"
-        report += f"▶️ 总播放次数：{total_plays} 次\n"
-        report += f"⏱️ 总观看时长：{hours:.1f} 小时\n\n"
+    def _get_popular_client(self, start: datetime, end: datetime) -> str:
+            """获取最受欢迎客户端"""
+            query = f"""
+            SELECT ClientName, COUNT(*) as count
+            FROM PlaybackActivity 
+            WHERE DateCreated >= '{start.strftime("%Y-%m-%d 00:00:00")}' 
+            AND DateCreated <= '{end.strftime("%Y-%m-%d 23:59:59")}'
+            GROUP BY ClientName
+            ORDER BY count DESC
+            LIMIT 5
+            """
+            result = self._query_emby(query)
+            if result and result.get("results"):
+                text = "📱 最受欢迎客户端：\n"
+                for item in result["results"]:
+                    client = item[0] or "Unknown"
+                    count = int(item[1] or 0)
+                    text += f"  · {client}：{count}次\n"
+                return text.rstrip()
+            return ""
 
-        if type_stats:
-            report += "📺 内容类型统计：\n"
-            for item_type, data in sorted(type_stats.items(), key=lambda x: x[1]["count"], reverse=True):
-                type_hours = data["duration"] / 3600
-                report += f"  · {item_type}：{data['count']} 次 ({type_hours:.1f}小时)\n"
+    def _get_new_media(self, start: datetime, end: datetime) -> str:
+        """获取新增观看媒体统计"""
+        query = f"""
+        SELECT ItemType, COUNT(DISTINCT ItemName) as new_count
+        FROM PlaybackActivity 
+        WHERE DateCreated >= '{start.strftime("%Y-%m-%d 00:00:00")}' 
+        AND DateCreated <= '{end.strftime("%Y-%m-%d 23:59:59")}'
+        GROUP BY ItemType
+        """
+        result = self._query_emby(query)
+        if result and result.get("results"):
+            text = "🆕 新增观看媒体：\n"
+            for item in result["results"]:
+                item_type = item[0] or "Unknown"
+                count = int(item[1] or 0)
+                text += f"  · {item_type}：{count}部\n"
+            return text.rstrip()
+        return ""
 
-        return report
+    def _get_cold_media(self) -> str:
+        """获取冷门媒体（超过30天无人观看）"""
+        thirty_days_ago = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d 00:00:00")
+        query = f"""
+        SELECT ItemName, ItemType, MAX(DateCreated) as last_play
+        FROM PlaybackActivity 
+        WHERE DateCreated < '{thirty_days_ago}'
+        GROUP BY ItemName, ItemType
+        ORDER BY last_play ASC
+        LIMIT 10
+        """
+        result = self._query_emby(query)
+        if result and result.get("results"):
+            text = "❄️ 冷门媒体提醒（>30天无观看）：\n"
+            for item in result["results"]:
+                name = item[0] or "Unknown"
+                item_type = item[1] or ""
+                last_play = item[2] or ""
+                text += f"  · {name} [{item_type}] - 最后观看：{last_play[:10]}\n"
+            return text.rstrip()
+        return ""
+
+    def _get_abnormal_users(self, start: datetime, end: datetime) -> str:
+        """获取异常用户告警（基于播放频次）"""
+        query = f"""
+        SELECT UserName, COUNT(*) as play_count,
+               COUNT(DISTINCT DATE(DateCreated)) as active_days
+        FROM PlaybackActivity 
+        WHERE DateCreated >= '{start.strftime("%Y-%m-%d 00:00:00")}' 
+        AND DateCreated <= '{end.strftime("%Y-%m-%d 23:59:59")}'
+        GROUP BY UserName
+        HAVING play_count > 100
+        ORDER BY play_count DESC
+        """
+        result = self._query_emby(query)
+        if result and result.get("results"):
+            text = "⚠️ 异常活跃用户：\n"
+            for item in result["results"]:
+                username = item[0] or "Unknown"
+                play_count = int(item[1] or 0)
+                active_days = int(item[2] or 0)
+                avg_daily = play_count / active_days if active_days > 0 else 0
+                text += f"  · {username}：{play_count}次播放 (日均{avg_daily:.1f}次)\n"
+            return text.rstrip()
+        return ""
+
+    def _get_trend_analysis(self, start: datetime, end: datetime) -> str:
+        """获取观影趋势分析"""
+        query = f"""
+        SELECT DATE(DateCreated) as play_date, 
+               COUNT(*) as play_count,
+               SUM(PlayDuration) as duration
+        FROM PlaybackActivity 
+        WHERE DateCreated >= '{start.strftime("%Y-%m-%d 00:00:00")}' 
+        AND DateCreated <= '{end.strftime("%Y-%m-%d 23:59:59")}'
+        GROUP BY DATE(DateCreated)
+        ORDER BY play_date DESC
+        """
+        result = self._query_emby(query)
+        if result and result.get("results"):
+            total_count = sum(int(item[1] or 0) for item in result["results"])
+            total_duration = sum(float(item[2] or 0) for item in result["results"])
+            days_count = len(result["results"])
+            
+            avg_count = total_count / days_count if days_count > 0 else 0
+            avg_duration = (total_duration / days_count / 3600) if days_count > 0 else 0
+            
+            text = "📈 观影趋势分析：\n"
+            text += f"  · 日均播放：{avg_count:.1f}次\n"
+            text += f"  · 日均时长：{avg_duration:.1f}小时\n"
+            
+            if result["results"]:
+                max_day = max(result["results"], key=lambda x: int(x[1] or 0))
+                text += f"  · 最活跃日期：{max_day[0]} ({int(max_day[1] or 0)}次)\n"
+            return text.rstrip()
+        return ""
+
+    def _get_time_distribution(self, start: datetime, end: datetime) -> str:
+        """获取观影时段分布"""
+        query = f"""
+        SELECT 
+            CASE 
+                WHEN CAST(strftime('%H', DateCreated) AS INTEGER) BETWEEN 0 AND 5 THEN '凌晨(00-06)'
+                WHEN CAST(strftime('%H', DateCreated) AS INTEGER) BETWEEN 6 AND 11 THEN '上午(06-12)'
+                WHEN CAST(strftime('%H', DateCreated) AS INTEGER) BETWEEN 12 AND 17 THEN '下午(12-18)'
+                ELSE '晚间(18-24)'
+            END as time_period,
+            COUNT(*) as count
+        FROM PlaybackActivity 
+        WHERE DateCreated >= '{start.strftime("%Y-%m-%d 00:00:00")}' 
+        AND DateCreated <= '{end.strftime("%Y-%m-%d 23:59:59")}'
+        GROUP BY time_period
+        ORDER BY count DESC
+        """
+        result = self._query_emby(query)
+        if result and result.get("results"):
+            text = "⏰ 观影时段分布：\n"
+            total = sum(int(item[1] or 0) for item in result["results"])
+            for item in result["results"]:
+                period = item[0] or "Unknown"
+                count = int(item[1] or 0)
+                percentage = (count / total * 100) if total > 0 else 0
+                text += f"  · {period}：{count}次 ({percentage:.1f}%)\n"
+            return text.rstrip()
+        return ""
