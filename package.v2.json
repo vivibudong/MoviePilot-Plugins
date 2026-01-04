@@ -14,6 +14,18 @@
       "v0.0.1": "第一版修改自豆瓣想看"
     }
   },
+  "EmbyUserManager": {
+    "name": "Emby用户管理器",
+    "description": "通过Telegram Bot实现Emby用户的自动化管理，支持激活码注册、续期等功能。",
+    "labels": "工具",
+    "version": "0.1",
+    "icon": "https://emby.media/community/uploads/monthly_2018_07/Logo_Color_512.png.82a6946698947e936b76a084666f4438.png",
+    "author": "Vivi",
+    "level": 2,
+    "history": {
+      "v0.1": "发布"
+    }
+  },
   "EmbyPlaybackReport": {
     "name": "Emby观影报告推送",
     "description": "定时推送Emby Playback Reporting统计信息，支持每日/每周/每月报告。",
