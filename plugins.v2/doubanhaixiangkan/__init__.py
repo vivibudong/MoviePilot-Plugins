@@ -37,7 +37,7 @@ class DoubanHaixiangkan(_PluginBase):
     # 插件版本
     plugin_version = "0.3"
     # 插件作者
-    plugin_author = "jxxghp,dwhmofly,Vivi,Gemini"
+    plugin_author = "jxxghp,dwhmofly,Vivi"
     # 作者主页
     author_url = "https://github.com/vivibudong"
     # 插件配置项ID前缀
