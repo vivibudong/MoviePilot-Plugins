@@ -3,11 +3,12 @@
     "name": "豆瓣还想看",
     "description": "豆瓣想看修改版，可重复入库已经删除源文件的历史想看。",
     "labels": "订阅",
-    "version": "0.1",
+    "version": "0.3",
     "icon": "douban.png",
     "author": "jxxghp,dwhmofly,Vivi",
     "level": 2,
     "history": {
+      "v0.3": "实现多用户管理",
       "v0.1": "修复bug",
       "v0.0.1": "第一版修改自豆瓣想看"
     }
