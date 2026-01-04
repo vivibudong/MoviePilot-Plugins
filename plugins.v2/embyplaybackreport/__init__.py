@@ -846,8 +846,8 @@ class EmbyPlaybackReport(_PluginBase):
             return text.rstrip()
         return ""
 
-    def _get_trend_analysis(self, start: datetime, end: datetime) -> str:
-        """获取观影趋势分析"""
+    def _get_trend_analysis(self, start: datetime, end: datetime, days: int) -> str:
+        """获取观影趋势分析 (已修复参数数量问题)"""
         query = f"""
         SELECT DATE(DateCreated) as play_date, 
                COUNT(*) as play_count,
@@ -860,25 +860,29 @@ class EmbyPlaybackReport(_PluginBase):
         """
         result = self._query_emby(query)
         if result and result.get("results"):
-            total_count = sum(int(item[1] or 0) for item in result["results"])
-            total_duration = sum(float(item[2] or 0) for item in result["results"])
-            days_count = len(result["results"])
+            # 这里的计算逻辑已确保类型转换安全
+            results_list = result["results"]
+            total_count = sum(int(item[1] or 0) for item in results_list)
+            total_duration = sum(float(item[2] or 0) for item in results_list)
+            active_days = len(results_list)
             
-            avg_count = total_count / days_count if days_count > 0 else 0
-            avg_duration = (total_duration / days_count / 3600) if days_count > 0 else 0
+            avg_count = total_count / active_days if active_days > 0 else 0
+            avg_duration = (total_duration / active_days / 3600) if active_days > 0 else 0
             
+            # 使用 f-string 自动处理类型转换，避免 += int 错误
             text = "📈 观影趋势分析：\n"
+            text += f"  · 统计周期：{days}天\n"
             text += f"  · 日均播放：{avg_count:.1f}次\n"
             text += f"  · 日均时长：{avg_duration:.1f}小时\n"
             
-            if result["results"]:
-                max_day = max(result["results"], key=lambda x: int(x[1] or 0))
+            if results_list:
+                max_day = max(results_list, key=lambda x: int(x[1] or 0))
                 text += f"  · 最活跃日期：{max_day[0]} ({int(max_day[1] or 0)}次)\n"
             return text.rstrip()
         return ""
 
     def _get_time_distribution(self, start: datetime, end: datetime) -> str:
-        """获取观影时段分布"""
+        """获取观影时段分布 (同步检查拼接逻辑)"""
         query = f"""
         SELECT 
             CASE 
@@ -902,6 +906,7 @@ class EmbyPlaybackReport(_PluginBase):
                 period = item[0] or "Unknown"
                 count = int(item[1] or 0)
                 percentage = (count / total * 100) if total > 0 else 0
+                # 确保使用 f-string 拼接，防止 int + str 错误
                 text += f"  · {period}：{count}次 ({percentage:.1f}%)\n"
             return text.rstrip()
         return ""
