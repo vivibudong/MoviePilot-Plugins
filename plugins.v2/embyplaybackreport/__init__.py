@@ -193,7 +193,7 @@ class EmbyPlaybackReport(_PluginBase):
                                             'model': 'emby_host',
                                             'label': 'Emby服务器地址',
                                             'placeholder': 'https://emby.example.com',
-                                            'hint': '只需填写主域名，如：http://192.168.1.2:8096'
+                                            'hint': '只需填写主域名，如：https://emby.vvapi.de'
                                         }
                                     }
                                 ]
@@ -428,9 +428,18 @@ class EmbyPlaybackReport(_PluginBase):
 
         for item in results:
             if len(item) >= 5:
-                plays = item[1] or 0
-                duration = item[2] or 0
-                item_type = item[3] or "Unknown"
+                # 确保类型转换为数值
+                try:
+                    plays = int(item[1]) if item[1] else 0
+                except (ValueError, TypeError):
+                    plays = 0
+                
+                try:
+                    duration = float(item[2]) if item[2] else 0
+                except (ValueError, TypeError):
+                    duration = 0
+                
+                item_type = str(item[3]) if item[3] else "Unknown"
                 
                 total_plays += plays
                 total_duration += duration
