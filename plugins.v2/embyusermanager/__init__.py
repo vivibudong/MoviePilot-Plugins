@@ -183,48 +183,9 @@ class EmbyUserManager(_PluginBase):
             }
         ]
 
-def get_api(self) -> List[Dict[str, Any]]:
-    """注册API"""
-    return [
-        {
-            "path": "/clear_logs",
-            "endpoint": self.clear_logs,
-            "methods": ["GET"],
-            "summary": "清空插件日志",
-            "description": "清空Emby用户管理器的所有日志记录"
-        }
-    ]
-
-    def clear_logs(self):
-        """清空插件日志的API接口"""
-        try:
-            # 这里清空你想清空的数据
-            # 例如:清空激活码使用记录、用户操作历史等
-            
-            with self._lock:
-                # 示例1:清空所有已使用的激活码记录
-                self._tokens = {k: v for k, v in self._tokens.items() if v.get("status") == "unused"}
-                
-                # 示例2:清空所有用户的续期历史
-                for user_id, info in self._user_bindings.items():
-                    if "renew_history" in info:
-                        info["renew_history"] = []
-                
-                self._save_data()
-            
-            logger.info("插件日志已清空")
-            return {
-                "code": 0,
-                "message": "日志清空成功",
-                "data": None
-            }
-        except Exception as e:
-            logger.error(f"清空日志失败: {str(e)}")
-            return {
-                "code": 1,
-                "message": f"清空失败: {str(e)}",
-                "data": None
-            }
+    def get_api(self) -> List[Dict[str, Any]]:
+        """注册API"""
+        pass
 
     def get_form(self) -> Tuple[List[dict], Dict[str, Any]]:
         """
@@ -500,36 +461,7 @@ def get_api(self) -> List[Dict[str, Any]]:
 
     def get_page(self) -> List[dict]:
         """插件详情页面"""
-        return [
-            {
-                'component': 'VRow',
-                'content': [
-                    {
-                        'component': 'VCol',
-                        'props': {
-                            'cols': 12,
-                            'md': 6
-                        },
-                        'content': [
-                            {
-                                'component': 'VBtn',
-                                'props': {
-                                    'color': 'error',
-                                    'variant': 'outlined',
-                                    'text': '清空插件日志'
-                                },
-                                'events': {
-                                    'click': {
-                                        'api': 'plugin/EmbyUserManager/clear_logs',
-                                        'method': 'get'
-                                    }
-                                }
-                            }
-                        ]
-                    }
-                ]
-            }
-        ]
+        pass
 
     @eventmanager.register(EventType.PluginAction)
     def handle_command(self, event: Event):
