@@ -482,8 +482,8 @@ class EmbyUserManager(_PluginBase):
             return
         
         # 获取用户信息 - 这里可能需要调整字段名
-        user_id = event_data.get("user_id")
-        username = event_data.get("username")
+        user_id = str(event_data.get("user"))  
+        username = event_data.get("username", "") 
         args = event_data.get("args", "")
         
         logger.info(f"收到命令: {action}, 用户: {user_id}, 参数: {args}")
@@ -1034,7 +1034,7 @@ class EmbyUserManager(_PluginBase):
             mtype=NotificationType.Manual,
             title="Emby用户管理",
             text=message,
-            userid=user_id
+            userid=str(user_id)  # 确保是字符串格式
         )
 
     def _save_data(self):
