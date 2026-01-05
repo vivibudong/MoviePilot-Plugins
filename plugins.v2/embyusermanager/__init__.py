@@ -484,16 +484,7 @@ class EmbyUserManager(_PluginBase):
         # 获取用户信息
         user_id = str(event_data.get("user")) if event_data.get("user") else None
         username = event_data.get("username", "")
-        
-        # 从事件数据中获取原始消息文本并解析参数
-        text = event_data.get("text", "")
-        args = ""
-        
-        # 解析命令和参数,格式如: /register TOKEN123
-        if text:
-            parts = text.strip().split(maxsplit=1)
-            if len(parts) > 1:
-                args = parts[1].strip()
+        args = event_data.get("arg_str", "")
         
         logger.info(f"收到命令: {action}, 用户: {user_id}, 参数: {args}")
         logger.info(f"事件数据内容: {event_data}")
@@ -1046,17 +1037,17 @@ class EmbyUserManager(_PluginBase):
         data = {
             "chat_id": user_id,
             "text": message,
-            "parse_mode": "Markdown"  # 支持Markdown格式
+            "parse_mode": "Markdown"
         }
-    
-    try:
-        res = RequestUtils().post_res(url, json=data)
-        if res and res.status_code == 200:
-            logger.info(f"Telegram消息发送成功: {user_id}")
-        else:
-            logger.error(f"Telegram消息发送失败: {res.status_code if res else 'No response'}")
-    except Exception as e:
-        logger.error(f"发送Telegram消息异常: {str(e)}")
+        
+        try:
+            res = RequestUtils().post_res(url, json=data)
+            if res and res.status_code == 200:
+                logger.info(f"Telegram消息发送成功: {user_id}")
+            else:
+                logger.error(f"Telegram消息发送失败: {res.status_code if res else 'No response'}")
+        except Exception as e:
+            logger.error(f"发送Telegram消息异常: {str(e)}")
 
     def _save_data(self):
         """保存数据到配置"""
