@@ -1041,13 +1041,26 @@ class EmbyUserManager(_PluginBase):
         }
         
         try:
-            res = RequestUtils().post_res(url, json=data)
-            if res and res.status_code == 200:
-                logger.info(f"Telegram消息发送成功: {user_id}")
+            logger.info(f"准备发送Telegram消息到: {user_id}")
+            logger.info(f"API地址: {url[:50]}...")  # 只显示前50个字符,避免泄露完整token
+            
+            # 使用 RequestUtils,它会自动使用 MoviePilot 配置的代理
+            res = RequestUtils(timeout=10).post_res(url, json=data)
+            
+            if res:
+                logger.info(f"Telegram API 响应状态码: {res.status_code}")
+                if res.status_code == 200:
+                    logger.info(f"Telegram消息发送成功: {user_id}")
+                    return
+                else:
+                    logger.error(f"Telegram API 返回错误: {res.text}")
             else:
-                logger.error(f"Telegram消息发送失败: {res.status_code if res else 'No response'}")
+                logger.error("Telegram API 无响应,可能是网络问题或需要配置代理")
+                
         except Exception as e:
             logger.error(f"发送Telegram消息异常: {str(e)}")
+            import traceback
+            logger.error(f"详细错误: {traceback.format_exc()}")
 
     def _save_data(self):
         """保存数据到配置"""
