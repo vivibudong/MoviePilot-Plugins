@@ -481,12 +481,13 @@ class EmbyUserManager(_PluginBase):
         if not action:
             return
         
-        # 获取用户信息 - 这里可能需要调整字段名
-        user_id = str(event_data.get("user"))  
-        username = event_data.get("username", "") 
+        # 获取用户信息
+        user_id = str(event_data.get("user")) if event_data.get("user") else None
+        username = event_data.get("username", "")
         args = event_data.get("args", "")
         
         logger.info(f"收到命令: {action}, 用户: {user_id}, 参数: {args}")
+        logger.info(f"事件数据内容: {event_data}")
         
         # 检查是否为管理员
         is_admin = int(user_id) in self._admin_ids if user_id else False
