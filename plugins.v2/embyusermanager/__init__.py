@@ -48,6 +48,8 @@ class EmbyUserManager(_PluginBase):
     _lock = threading.Lock()
     _expire_remind_days = [7, 3, 1]
     _auto_delete_expired = False
+    _bot_source_name = ""  # Bot来源名称,用于过滤消息
+    
 
     def init_plugin(self, config: dict = None):
         """初始化插件"""
@@ -85,6 +87,7 @@ class EmbyUserManager(_PluginBase):
                 self._expire_remind_days = [7, 3, 1]
             
             self._auto_delete_expired = config.get("auto_delete_expired", False)
+            self._bot_source_name = config.get("bot_source_name", "")
 
         # 停止现有任务
         self.stop_service()
@@ -111,6 +114,13 @@ class EmbyUserManager(_PluginBase):
     def get_command() -> List[Dict[str, Any]]:
         """注册插件命令"""
         return [
+            {
+                "cmd": "/help",
+                "event": EventType.PluginAction,
+                "desc": "查看帮助信息",
+                "category": "Emby用户",
+                "data": {"action": "help"}
+            },
             {
                 "cmd": "/user_add",
                 "event": EventType.PluginAction,
@@ -350,6 +360,44 @@ class EmbyUserManager(_PluginBase):
                                     }
                                 ]
                             }
+                            {
+                                'component': 'VRow',
+                                'content': [
+                                    {
+                                        'component': 'VCol',
+                                        'props': {
+                                            'cols': 12,
+                                            'md': 6
+                                        },
+                                        'content': [
+                                            {
+                                                'component': 'VTextField',
+                                                'props': {
+                                                    'model': 'bot_source_name',
+                                                    'label': 'Bot来源名称',
+                                                    'placeholder': '填写通知渠道中配置的Bot名称,如: TG通知'
+                                                }
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        'component': 'VCol',
+                                        'props': {
+                                            'cols': 12,
+                                            'md': 6
+                                        },
+                                        'content': [
+                                            {
+                                                'component': 'VSwitch',
+                                                'props': {
+                                                    'model': 'auto_delete_expired',
+                                                    'label': '自动删除过期用户',
+                                                }
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
                         ]
                     },
                     {
@@ -431,12 +479,14 @@ class EmbyUserManager(_PluginBase):
                                         'props': {
                                             'type': 'info',
                                             'variant': 'tonal',
-                                            'text': '使用说明：\n'
+                                            'text': '使用说明:\n'
                                                     '1. 在BotFather中创建Bot并获取Token\n'
-                                                    '2. 获取你的Telegram ID（可通过 @userinfobot）\n'
-                                                    '3. 在Emby中创建一个模板用户，配置好权限和媒体库访问\n'
-                                                    '4. 获取模板用户ID（在Emby用户管理页面的URL中）\n'
-                                                    '5. 配置完成后，在Telegram中向Bot发送命令即可'
+                                                    '2. 获取你的Telegram ID(可通过 @userinfobot)\n'
+                                                    '3. 在Emby中创建一个模板用户,配置好权限和媒体库访问\n'
+                                                    '4. 获取模板用户ID(在Emby用户管理页面的URL中)\n'
+                                                    '5. 将Bot添加到MoviePilot的通知渠道中\n'
+                                                    '6. 在"Bot来源名称"中填写通知渠道里配置的Bot名称\n'
+                                                    '7. 配置完成后,在Telegram中向Bot发送 /help 查看命令'
                                         }
                                     }
                                 ]
@@ -455,6 +505,7 @@ class EmbyUserManager(_PluginBase):
             "emby_template_user": "",
             "expire_remind_days": "7,3,1",
             "auto_delete_expired": False,
+            "bot_source_name": "",
             "tokens": "{}",
             "user_bindings": "{}"
         }
@@ -473,8 +524,11 @@ class EmbyUserManager(_PluginBase):
             
         event_data = event.event_data
         
-        # 添加这行调试日志,查看实际的事件数据
-        logger.info(f"事件数据内容: {event_data}")
+        # 过滤消息来源
+        if self._bot_source_name:
+            source = event_data.get("source", "")
+            if source != self._bot_source_name:
+                return  # 忽略其他来源的消息
         
         action = event_data.get("action")
         
@@ -494,6 +548,10 @@ class EmbyUserManager(_PluginBase):
         is_admin = int(user_id) in self._admin_ids if user_id else False
         
         # 处理命令
+        if action == "help":
+            self._handle_help(user_id, is_admin)
+        elif action == "register":
+            self._handle_register(user_id, username, args)
         if action == "register":
             self._handle_register(user_id, username, args)
         elif action == "renew":
@@ -517,7 +575,58 @@ class EmbyUserManager(_PluginBase):
                 self._handle_renew_user(user_id, args)
         else:
             self._send_message(user_id, "⚠️ 无权限执行此操作")
+            
+    def _handle_help(self, user_id: str, is_admin: bool):
+        """显示帮助信息"""
+        user_commands = """
+    📖 Emby用户管理 - 帮助信息
+    
+    👤 用户命令:
+    ━━━━━━━━━━━━━━━━━━━━
+    /help - 查看帮助信息
+    /register <激活码> - 注册新账户
+    /renew <续期码> - 使用续期码续期
+    /my_info - 查看我的账户信息
+    
+    💡 使用示例:
+    /register TOKEN9BV7Q5YF8
+    /renew RENEW5A2C8D3F1
+    
+    ━━━━━━━━━━━━━━━━━━━━
+    如有问题请联系管理员
+    """
+    
+        admin_commands = """
+    🔧 管理员命令:
+    ━━━━━━━━━━━━━━━━━━━━
+    /token_gen [天数] - 生成注册激活码(默认30天)
+    /token_list - 查看激活码列表
+    /renew_gen [天数] - 生成续期码(默认30天)
+    /renew_user <用户名> <天数> - 直接为用户续期
+    /user_add <用户名> [天数] - 创建新用户(默认30天)
+    /user_del <用户名> - 删除用户
+    /user_list - 查看所有用户列表
+    
+    💡 使用示例:
+    /token_gen 30
+    /renew_gen 30
+    /renew_user user_123456 30
+    /user_add testuser 60
+    
+    """
+    
+        message = user_commands
+        if is_admin:
+            message += admin_commands
+        
+        self._send_message(user_id, message)
 
+    def _handle_register(self, user_id: str, username: str, args: str):
+        """处理用户注册"""
+        if not args:
+            self._send_message(user_id, "❌ 请提供激活码\n用法: /register <激活码>")
+            return
+            
     def _handle_register(self, user_id: str, username: str, args: str):
         """处理用户注册"""
         if not args:
@@ -739,7 +848,7 @@ class EmbyUserManager(_PluginBase):
         
         message = (
             f"✅ 续期码生成成功！\n\n"
-            f"续期码: `{token}`\n"
+            f"续期码: {token}\n"
             f"续期天数: {days}天\n"
             f"状态: 未使用\n\n"
             f"用户使用方式: /renew {token}"
@@ -1031,13 +1140,13 @@ class EmbyUserManager(_PluginBase):
             logger.warning("未配置Telegram Bot Token")
             return
         
-        # 直接调用Telegram Bot API发送消息
         url = f"https://api.telegram.org/bot{self._telegram_token}/sendMessage"
         
+        # 不使用 Markdown,避免格式错误
         data = {
             "chat_id": user_id,
-            "text": message,
-            "parse_mode": "Markdown"
+            "text": message
+            # 移除 "parse_mode": "Markdown"
         }
         
         try:
@@ -1045,7 +1154,6 @@ class EmbyUserManager(_PluginBase):
             
             logger.info(f"准备发送Telegram消息到: {user_id}")
             
-            # 直接使用 requests 库,不通过 RequestUtils
             response = requests.post(url, json=data, timeout=10)
             
             if response.status_code == 200:
@@ -1053,13 +1161,10 @@ class EmbyUserManager(_PluginBase):
             else:
                 logger.error(f"Telegram API 返回错误: {response.status_code} - {response.text}")
                 
-        except ImportError:
-            logger.error("requests 库未安装")
         except Exception as e:
             logger.error(f"发送Telegram消息异常: {str(e)}")
-            import traceback
-            logger.error(f"详细错误: {traceback.format_exc()}")
 
+    
     def _save_data(self):
         """保存数据到配置"""
         config = self.get_config()
@@ -1090,9 +1195,9 @@ class EmbyUserManager(_PluginBase):
         
         for token, info in self._tokens.items():
             if info.get("status") == "unused":
-                unused_tokens.append(f"`{token}` - {info.get('type')} - {info.get('days')}天")
+                unused_tokens.append(f"{token} - {info.get('type')} - {info.get('days')}天")
             else:
-                used_tokens.append(f"`{token}` - 已使用 - {info.get('used_by_emby_username')}")
+                used_tokens.append(f"{token} - 已使用 - {info.get('used_by_emby_username')}")
         
         message = "📋 激活码列表\n\n"
         
@@ -1129,7 +1234,7 @@ class EmbyUserManager(_PluginBase):
         
         message = (
             f"✅ 续期码生成成功！\n\n"
-            f"续期码: `{token}`\n"
+            f"续期码: {token}\n"
             f"续期天数: {days}天\n"
             f"状态: 未使用\n\n"
             f"用户使用方式: /renew {token}"
