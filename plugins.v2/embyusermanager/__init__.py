@@ -1030,13 +1030,23 @@ class EmbyUserManager(_PluginBase):
             logger.warning("未配置Telegram Bot Token")
             return
         
-        # 使用MoviePilot的通知系统发送消息
-        self.post_message(
-            mtype=NotificationType.Manual,
-            title="Emby用户管理",
-            text=message,
-            userid=str(user_id)  # 确保是字符串格式
-        )
+        # 直接调用Telegram Bot API发送消息
+        url = f"https://api.telegram.org/bot{self._telegram_token}/sendMessage"
+        
+        data = {
+            "chat_id": user_id,
+            "text": message,
+            "parse_mode": "Markdown"  # 支持Markdown格式
+        }
+    
+    try:
+        res = RequestUtils().post_res(url, json=data)
+        if res and res.status_code == 200:
+            logger.info(f"Telegram消息发送成功: {user_id}")
+        else:
+            logger.error(f"Telegram消息发送失败: {res.status_code if res else 'No response'}")
+    except Exception as e:
+        logger.error(f"发送Telegram消息异常: {str(e)}")
 
     def _save_data(self):
         """保存数据到配置"""
