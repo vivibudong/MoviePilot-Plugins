@@ -472,12 +472,16 @@ class EmbyUserManager(_PluginBase):
             return
             
         event_data = event.event_data
+        
+        # 添加这行调试日志,查看实际的事件数据
+        logger.info(f"事件数据内容: {event_data}")
+        
         action = event_data.get("action")
         
         if not action:
             return
         
-        # 获取用户信息
+        # 获取用户信息 - 这里可能需要调整字段名
         user_id = event_data.get("user_id")
         username = event_data.get("username")
         args = event_data.get("args", "")
