@@ -484,10 +484,20 @@ class EmbyUserManager(_PluginBase):
         # 获取用户信息
         user_id = str(event_data.get("user")) if event_data.get("user") else None
         username = event_data.get("username", "")
-        args = event_data.get("args", "")
+        
+        # 从事件数据中获取原始消息文本并解析参数
+        text = event_data.get("text", "")
+        args = ""
+        
+        # 解析命令和参数,格式如: /register TOKEN123
+        if text:
+            parts = text.strip().split(maxsplit=1)
+            if len(parts) > 1:
+                args = parts[1].strip()
         
         logger.info(f"收到命令: {action}, 用户: {user_id}, 参数: {args}")
         logger.info(f"事件数据内容: {event_data}")
+        logger.info(f"完整事件数据: {json.dumps(event_data, default=str, ensure_ascii=False)}")
         
         # 检查是否为管理员
         is_admin = int(user_id) in self._admin_ids if user_id else False
