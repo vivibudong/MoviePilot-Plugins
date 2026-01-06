@@ -359,7 +359,7 @@ class EmbyUserManager(_PluginBase):
                                         }
                                     }
                                 ]
-                            }
+                            },
                             {
                                 'component': 'VRow',
                                 'content': [
@@ -395,27 +395,6 @@ class EmbyUserManager(_PluginBase):
                                                 }
                                             }
                                         ]
-                                    }
-                                ]
-                            }
-                        ]
-                    },
-                    {
-                        'component': 'VRow',
-                        'content': [
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 6
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VSwitch',
-                                        'props': {
-                                            'model': 'auto_delete_expired',
-                                            'label': '自动删除过期用户',
-                                        }
                                     }
                                 ]
                             }
@@ -552,8 +531,6 @@ class EmbyUserManager(_PluginBase):
             self._handle_help(user_id, is_admin)
         elif action == "register":
             self._handle_register(user_id, username, args)
-        if action == "register":
-            self._handle_register(user_id, username, args)
         elif action == "renew":
             self._handle_renew(user_id, username, args)
         elif action == "my_info":
@@ -621,12 +598,6 @@ class EmbyUserManager(_PluginBase):
         
         self._send_message(user_id, message)
 
-    def _handle_register(self, user_id: str, username: str, args: str):
-        """处理用户注册"""
-        if not args:
-            self._send_message(user_id, "❌ 请提供激活码\n用法: /register <激活码>")
-            return
-            
     def _handle_register(self, user_id: str, username: str, args: str):
         """处理用户注册"""
         if not args:
