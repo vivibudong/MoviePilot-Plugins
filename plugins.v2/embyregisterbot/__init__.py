@@ -1,6 +1,5 @@
 import asyncio
 import threading
-import json
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Tuple, Optional
 from pathlib import Path
@@ -39,15 +38,14 @@ class EmbyRegisterBot(_PluginBase):
     _emby_host = ""
     _emby_api_key = ""
     _admin_user_ids = []
-    _template_user_id = ""  # 模板用户ID
-    _register_codes = {}  # {code: days}
-    _registered_users = {}  # {tg_user_id: {user_info}}
+    _template_user_id = ""
+    _register_codes = {}
+    _registered_users = {}
     _expire_warning_days = 3
     _bot_thread = None
     _application = None
     _stop_event = None
     _check_thread = None
-    _data_path = None
 
     def init_plugin(self, config: dict = None):
         """初始化插件"""
@@ -68,10 +66,6 @@ class EmbyRegisterBot(_PluginBase):
             
             # 解析已注册用户
             self._parse_registered_users(config.get("registered_users", ""))
-
-        # 设置数据存储路径
-        self._data_path = Path(__file__).parent / "data"
-        self._data_path.mkdir(exist_ok=True)
 
         # 停止旧的bot
         if self._bot_thread and self._bot_thread.is_alive():
@@ -108,32 +102,38 @@ class EmbyRegisterBot(_PluginBase):
             if not line:
                 continue
             try:
-                # 格式: @username,tgid,注册时间,剩余天数,emby用户名
+                # 格式: @username,tgid,注册时间,剩余天数,emby用户名,emby_user_id,状态
                 parts = [p.strip() for p in line.split(",")]
-                if len(parts) >= 5:
+                if len(parts) >= 7:
                     tg_username = parts[0]
                     tg_id = int(parts[1])
                     register_time = parts[2]
                     days_left = int(parts[3])
                     emby_username = parts[4]
+                    emby_user_id = parts[5]
+                    status = parts[6]
                     
                     # 计算到期时间
-                    register_dt = datetime.strptime(register_time, "%Y-%m-%d %H:%M:%S")
-                    expire_dt = register_dt + timedelta(days=days_left)
+                    now = datetime.now()
+                    expire_dt = now + timedelta(days=days_left)
                     
                     self._registered_users[tg_id] = {
                         "tg_username": tg_username,
                         "emby_username": emby_username,
+                        "emby_user_id": emby_user_id,
                         "register_time": register_time,
                         "expire_time": expire_dt.strftime("%Y-%m-%d %H:%M:%S"),
-                        "emby_user_id": "",  # 需要从Emby获取
-                        "status": "active"  # active, disabled, deleted
+                        "status": status
                     }
+                    
+                    if status == "disabled" and len(parts) >= 8:
+                        self._registered_users[tg_id]["disabled_time"] = parts[7]
+                        
             except Exception as e:
                 logger.warning(f"解析用户信息失败: {line}, 错误: {e}")
 
-    def _save_config(self):
-        """保存配置到插件配置"""
+    def _generate_config_text(self) -> Tuple[str, str]:
+        """生成配置文本"""
         # 生成注册码文本
         codes_text = "\n".join([f"{code},{days}" for code, days in self._register_codes.items()])
         
@@ -143,29 +143,43 @@ class EmbyRegisterBot(_PluginBase):
             if info["status"] == "deleted":
                 continue
             
-            register_dt = datetime.strptime(info["register_time"], "%Y-%m-%d %H:%M:%S")
             expire_dt = datetime.strptime(info["expire_time"], "%Y-%m-%d %H:%M:%S")
-            days_left = (expire_dt - datetime.now()).days
+            days_left = max(0, (expire_dt - datetime.now()).days)
             
-            users_lines.append(
-                f"{info['tg_username']},{tg_id},{info['register_time']},{days_left},{info['emby_username']}"
+            line = (
+                f"{info['tg_username']},{tg_id},{info['register_time']},"
+                f"{days_left},{info['emby_username']},{info['emby_user_id']},{info['status']}"
             )
+            
+            if info["status"] == "disabled" and "disabled_time" in info:
+                line += f",{info['disabled_time']}"
+            
+            users_lines.append(line)
+        
         users_text = "\n".join(users_lines)
         
-        # 这里需要调用MoviePilot的配置更新方法
-        # 由于无法直接访问配置系统,我们使用文件存储
-        config_file = self._data_path / "config.json"
-        config_data = {
-            "register_codes": self._register_codes,
-            "registered_users": self._registered_users
-        }
-        with open(config_file, "w", encoding="utf-8") as f:
-            json.dump(config_data, f, ensure_ascii=False, indent=2)
+        return codes_text, users_text
+
+    def update_config(self):
+        """更新插件配置 - 触发MP保存配置"""
+        codes_text, users_text = self._generate_config_text()
+        
+        # 更新配置
+        config = self.get_config()
+        config["register_codes"] = codes_text
+        config["registered_users"] = users_text
+        
+        # 保存配置
+        self.update_config_data(config)
+        logger.info("配置已更新并保存")
 
     def _start_check_thread(self):
         """启动定期检查线程"""
+        if self._check_thread and self._check_thread.is_alive():
+            return
+            
         def check_loop():
-            while not self._stop_event.is_set():
+            while self._enabled and not (self._stop_event and self._stop_event.is_set()):
                 try:
                     self._check_expiring_users()
                     self._check_expired_users()
@@ -173,7 +187,10 @@ class EmbyRegisterBot(_PluginBase):
                     logger.error(f"检查用户状态失败: {e}")
                 
                 # 每小时检查一次
-                self._stop_event.wait(3600)
+                for _ in range(3600):
+                    if self._stop_event and self._stop_event.is_set():
+                        break
+                    threading.Event().wait(1)
         
         self._check_thread = threading.Thread(target=check_loop, daemon=True, name="EmbyCheckThread")
         self._check_thread.start()
@@ -183,7 +200,7 @@ class EmbyRegisterBot(_PluginBase):
         """检查即将到期的用户"""
         now = datetime.now()
         
-        for tg_id, info in self._registered_users.items():
+        for tg_id, info in list(self._registered_users.items()):
             if info["status"] != "active":
                 continue
             
@@ -192,13 +209,14 @@ class EmbyRegisterBot(_PluginBase):
             
             if 0 < days_left <= self._expire_warning_days:
                 # 发送到期提醒
-                asyncio.run(self._send_expire_warning(tg_id, days_left))
+                self._send_expire_warning_sync(tg_id, days_left)
 
     def _check_expired_users(self):
         """检查过期用户"""
         now = datetime.now()
+        need_update = False
         
-        for tg_id, info in self._registered_users.items():
+        for tg_id, info in list(self._registered_users.items()):
             expire_dt = datetime.strptime(info["expire_time"], "%Y-%m-%d %H:%M:%S")
             
             if info["status"] == "active" and expire_dt < now:
@@ -206,8 +224,8 @@ class EmbyRegisterBot(_PluginBase):
                 if self._disable_emby_user(info["emby_user_id"]):
                     info["status"] = "disabled"
                     info["disabled_time"] = now.strftime("%Y-%m-%d %H:%M:%S")
-                    self._save_config()
-                    asyncio.run(self._send_message(tg_id, "⚠️ 您的Emby账户已到期并被禁用,7天内续费可恢复"))
+                    need_update = True
+                    self._send_message_sync(tg_id, "⚠️ 您的Emby账户已到期并被禁用,7天内续费可恢复")
             
             elif info["status"] == "disabled":
                 disabled_dt = datetime.strptime(info.get("disabled_time", info["expire_time"]), "%Y-%m-%d %H:%M:%S")
@@ -215,29 +233,42 @@ class EmbyRegisterBot(_PluginBase):
                     # 删除账户
                     if self._delete_emby_user(info["emby_user_id"]):
                         info["status"] = "deleted"
-                        self._save_config()
-                        asyncio.run(self._send_message(tg_id, "❌ 您的Emby账户已被永久删除"))
+                        need_update = True
+                        self._send_message_sync(tg_id, "❌ 您的Emby账户已被永久删除")
+        
+        if need_update:
+            self.update_config()
 
-    async def _send_expire_warning(self, tg_id: int, days_left: int):
-        """发送到期提醒"""
+    def _send_expire_warning_sync(self, tg_id: int, days_left: int):
+        """同步发送到期提醒"""
         if not self._application:
             return
         
         try:
-            await self._application.bot.send_message(
-                chat_id=tg_id,
-                text=f"⏰ 提醒: 您的Emby账户还有 {days_left} 天到期\n\n请及时使用 /renew 命令续费"
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(
+                self._application.bot.send_message(
+                    chat_id=tg_id,
+                    text=f"⏰ 提醒: 您的Emby账户还有 {days_left} 天到期\n\n请及时使用 /renew 命令续费"
+                )
             )
+            loop.close()
         except Exception as e:
             logger.error(f"发送到期提醒失败: {e}")
 
-    async def _send_message(self, tg_id: int, text: str):
-        """发送消息给用户"""
+    def _send_message_sync(self, tg_id: int, text: str):
+        """同步发送消息给用户"""
         if not self._application:
             return
         
         try:
-            await self._application.bot.send_message(chat_id=tg_id, text=text)
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(
+                self._application.bot.send_message(chat_id=tg_id, text=text)
+            )
+            loop.close()
         except Exception as e:
             logger.error(f"发送消息失败: {e}")
 
@@ -272,9 +303,6 @@ class EmbyRegisterBot(_PluginBase):
                 # 管理员命令
                 self._application.add_handler(CommandHandler("admin", self._cmd_admin))
                 self._application.add_handler(CommandHandler("addcode", self._cmd_addcode))
-                
-                # 回调查询处理器
-                self._application.add_handler(CallbackQueryHandler(self._button_callback))
 
                 logger.info("Telegram Bot 启动成功,开始轮询...")
                 
@@ -406,7 +434,7 @@ class EmbyRegisterBot(_PluginBase):
             del self._register_codes[register_code]
             
             # 保存配置
-            self._save_config()
+            self.update_config()
             
             await update.message.reply_text(
                 f"✅ 注册成功!\n\n"
@@ -416,6 +444,7 @@ class EmbyRegisterBot(_PluginBase):
                 f"🔗 Emby服务器: {self._emby_host}\n"
                 f"🔑 初始密码: 空(请登录后修改)"
             )
+            logger.info(f"用户注册成功: TG={user_id}, Emby={emby_username}")
         else:
             await update.message.reply_text(f"❌ 注册失败: {message}")
 
@@ -446,7 +475,7 @@ class EmbyRegisterBot(_PluginBase):
             f"📊 您的账号信息:\n\n"
             f"👤 Emby用户名: {info['emby_username']}\n"
             f"📅 到期时间: {expire_dt.strftime('%Y-%m-%d')}\n"
-            f"⏰ 剩余天数: {days_left}天\n"
+            f"⏰ 剩余天数: {max(0, days_left)}天\n"
             f"📌 状态: {status_text.get(info['status'], '未知')}\n"
             f"📝 注册时间: {info['register_time']}"
         )
@@ -481,6 +510,8 @@ class EmbyRegisterBot(_PluginBase):
         if info["status"] == "disabled":
             if self._enable_emby_user(info["emby_user_id"]):
                 info["status"] = "active"
+                if "disabled_time" in info:
+                    del info["disabled_time"]
         
         # 续期
         current_expire = datetime.strptime(info["expire_time"], "%Y-%m-%d %H:%M:%S")
@@ -497,13 +528,14 @@ class EmbyRegisterBot(_PluginBase):
         del self._register_codes[register_code]
         
         # 保存配置
-        self._save_config()
+        self.update_config()
         
         await update.message.reply_text(
             f"✅ 续期成功!\n\n"
             f"📅 新到期时间: {new_expire.strftime('%Y-%m-%d')}\n"
             f"➕ 增加天数: {days}天"
         )
+        logger.info(f"用户续期成功: TG={user_id}, 新到期时间={new_expire}")
 
     async def _cmd_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """处理 /help 命令"""
@@ -549,13 +581,16 @@ class EmbyRegisterBot(_PluginBase):
             status_emoji = {"active": "✅", "disabled": "⚠️"}
             user_list += (
                 f"{status_emoji.get(info['status'], '❓')} {info['tg_username']} "
-                f"({info['emby_username']}) - 剩余{days_left}天\n"
+                f"({info['emby_username']}) - 剩余{max(0, days_left)}天\n"
             )
         
         # 列出所有注册码
-        code_list = "\n\n🎫 可用注册码:\n\n"
+        code_list = "\n🎫 可用注册码:\n\n"
         for code, days in self._register_codes.items():
             code_list += f"• {code} - {days}天\n"
+        
+        if not self._register_codes:
+            code_list += "暂无可用注册码\n"
         
         await update.message.reply_text(
             f"🔧 管理面板\n\n"
@@ -589,16 +624,10 @@ class EmbyRegisterBot(_PluginBase):
             return
         
         self._register_codes[code] = days
-        self._save_config()
+        self.update_config()
         
         await update.message.reply_text(f"✅ 已添加注册码: {code} ({days}天)")
-
-    async def _button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """处理按钮回调"""
-        query = update.callback_query
-        await query.answer()
-        
-        # 由于改为命令式操作,这里可以移除按钮回调逻辑
+        logger.info(f"管理员添加注册码: {code}, {days}天")
 
     # ===== Emby API 交互方法 =====
     
@@ -866,8 +895,9 @@ class EmbyRegisterBot(_PluginBase):
                                         'props': {
                                             'model': 'registered_users',
                                             'label': '已注册用户',
-                                            'placeholder': '格式: @TG用户名,TGID,注册时间,剩余天数,Emby用户名\n⚠️ 删除此处的行将同时删除Emby账户!',
-                                            'rows': 10
+                                            'placeholder': '格式: @TG用户名,TGID,注册时间,剩余天数,Emby用户名,EmbyID,状态\n⚠️ 删除此处的行将同时删除Emby账户!\n此区域会自动更新,请勿手动编辑',
+                                            'rows': 10,
+                                            'readonly': True
                                         }
                                     }
                                 ]
@@ -886,7 +916,7 @@ class EmbyRegisterBot(_PluginBase):
                                         'props': {
                                             'type': 'info',
                                             'variant': 'tonal',
-                                            'text': '✨ 本插件使用独立的Telegram Bot,完全不依赖MP通知渠道\n📝 用户通过命令注册: /register <用户名> <注册码>\n⏰ 到期前自动提醒,到期后禁用,7天后删除\n🔧 管理员可通过 /admin 查看所有用户状态'
+                                            'text': '✨ 数据自动持久化到MP配置中\n📝 用户通过命令注册: /register <用户名> <注册码>\n⏰ 到期前自动提醒,到期后禁用,7天后删除\n🔧 管理员可通过 /admin 查看所有用户状态\n💾 所有操作会自动保存到配置'
                                         }
                                     }
                                 ]
