@@ -130,16 +130,34 @@ class EmbyRegisterBot(_PluginBase):
                 # 获取bot信息用于验证
                 try:
                     bot_info = loop.run_until_complete(self._application.bot.get_me())
-                    logger.info(f"Bot信息 - 用户名: @{bot_info.username}, ID: {bot_info.id}, 名称: {bot_info.first_name}")
+                    logger.info(f"✅ Bot信息 - 用户名: @{bot_info.username}, ID: {bot_info.id}, 名称: {bot_info.first_name}")
+                    
+                    # 测试获取updates
+                    logger.info("🔍 测试获取updates...")
+                    test_updates = loop.run_until_complete(
+                        self._application.bot.get_updates(limit=1, timeout=2)
+                    )
+                    logger.info(f"✅ 测试成功，获取到 {len(test_updates)} 条updates")
+                    
                 except Exception as e:
-                    logger.error(f"获取bot信息失败: {e}")
+                    logger.error(f"❌ 初始化测试失败: {e}", exc_info=True)
+                    logger.error("Bot无法正常工作，停止运行")
+                    return
                 
                 logger.info("Telegram Bot 正在运行...")
                 
+                logger.info("Telegram Bot 正在运行...")
+                logger.info("🔄 开始消息轮询循环...")
+                
                 # 手动轮询 - 更可靠的方式
                 last_update_id = 0
+                poll_count = 0
+                
                 while not self._stop_event.is_set():
                     try:
+                        poll_count += 1
+                        logger.debug(f"开始第 {poll_count} 次轮询，offset={last_update_id}")
+                        
                         # 使用事件循环获取更新
                         updates = loop.run_until_complete(
                             self._application.bot.get_updates(
@@ -149,21 +167,32 @@ class EmbyRegisterBot(_PluginBase):
                             )
                         )
                         
+                        logger.debug(f"第 {poll_count} 次轮询完成，获取到 {len(updates)} 条更新")
+                        
                         if updates:
-                            logger.info(f"收到 {len(updates)} 条更新")
+                            logger.info(f"🔔 收到 {len(updates)} 条更新")
                             for update in updates:
+                                logger.info(f"处理 update_id: {update.update_id}")
                                 last_update_id = update.update_id + 1
                                 # 处理更新
-                                loop.run_until_complete(
-                                    self._application.process_update(update)
-                                )
+                                try:
+                                    loop.run_until_complete(
+                                        self._application.process_update(update)
+                                    )
+                                    logger.info(f"✅ update_id {update.update_id} 处理完成")
+                                except Exception as process_err:
+                                    logger.error(f"处理update失败: {process_err}", exc_info=True)
+                        
+                        # 每30次轮询输出一次心跳日志
+                        if poll_count % 30 == 0:
+                            logger.info(f"💓 轮询心跳 - 已轮询 {poll_count} 次，最后update_id={last_update_id}")
                         
                         # 检查停止信号
                         if self._stop_event.wait(timeout=0.1):
                             break
                             
                     except Exception as e:
-                        logger.error(f"轮询错误: {e}", exc_info=True)
+                        logger.error(f"❌ 轮询错误: {e}", exc_info=True)
                         self._stop_event.wait(timeout=3)  # 出错后等待3秒再重试
                 
                 # 停止bot
