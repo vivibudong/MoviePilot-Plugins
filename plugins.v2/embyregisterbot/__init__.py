@@ -1,5 +1,6 @@
 import asyncio
 import threading
+import json
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Tuple, Optional
 from pathlib import Path
@@ -46,6 +47,11 @@ class EmbyRegisterBot(_PluginBase):
     _application = None
     _stop_event = None
     _check_thread = None
+    _data_file = None
+
+    def __init__(self):
+        super().__init__()
+        self._data_file = Path.cwd() / "config" / f"{self.plugin_config_prefix}_data.json"
 
     def init_plugin(self, config: dict = None):
         """初始化插件"""
@@ -67,6 +73,9 @@ class EmbyRegisterBot(_PluginBase):
             # 解析已注册用户
             self._parse_registered_users(config.get("registered_users", ""))
 
+        # 加载运行时数据文件
+        self._load_data()
+
         # 停止旧的bot
         if self._bot_thread and self._bot_thread.is_alive():
             self._stop_bot()
@@ -74,6 +83,63 @@ class EmbyRegisterBot(_PluginBase):
         if self._enabled and self._telegram_token:
             self._start_bot()
             self._start_check_thread()
+
+    def update_config(self, config: dict):
+        """框架配置更新方法 - 处理UI表单保存"""
+        # 更新标准配置
+        self._enabled = config.get("enabled", False)
+        self._telegram_token = config.get("telegram_token", "")
+        self._emby_host = config.get("emby_host", "").rstrip("/")
+        self._emby_api_key = config.get("emby_api_key", "")
+        self._admin_user_ids = [
+            int(uid.strip()) for uid in config.get("admin_user_ids", "").split(",") 
+            if uid.strip()
+        ]
+        self._template_user_id = config.get("template_user_id", "")
+        self._expire_warning_days = int(config.get("expire_warning_days", 3))
+        
+        # 解析表单中的自定义数据
+        self._parse_register_codes(config.get("register_codes", ""))
+        self._parse_registered_users(config.get("registered_users", ""))
+        
+        # 保存数据文件
+        self._save_data()
+        
+        logger.info("配置已更新 (来自UI表单)")
+        
+        # 重启 bot 如果启用
+        if self._enabled and self._telegram_token:
+            if self._bot_thread and self._bot_thread.is_alive():
+                self._stop_bot()
+            self._start_bot()
+            self._start_check_thread()
+
+    def _load_data(self):
+        """加载运行时数据文件"""
+        if self._data_file.exists():
+            try:
+                with open(self._data_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                self._parse_register_codes(data.get("register_codes", ""))
+                self._parse_registered_users(data.get("registered_users", ""))
+                logger.info(f"运行时数据加载成功: codes={len(self._register_codes)}, users={len(self._registered_users)}")
+            except Exception as e:
+                logger.error(f"加载运行时数据失败: {e}")
+
+    def _save_data(self):
+        """保存运行时数据到文件"""
+        try:
+            codes_text, users_text = self._generate_config_text()
+            data = {
+                "register_codes": codes_text,
+                "registered_users": users_text
+            }
+            self._data_file.parent.mkdir(exist_ok=True)
+            with open(self._data_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            logger.info(f"运行时数据保存成功: codes={len(self._register_codes)}, users={len(self._registered_users)}")
+        except Exception as e:
+            logger.error(f"保存运行时数据失败: {e}")
 
     def _parse_register_codes(self, codes_text: str):
         """解析注册码配置"""
@@ -155,23 +221,6 @@ class EmbyRegisterBot(_PluginBase):
         
         return codes_text, users_text
 
-    def update_config(self):
-        """更新插件配置 - 触发MP保存配置"""
-        codes_text, users_text = self._generate_config_text()
-        
-        # 更新配置
-        config = self.get_config()
-        config["register_codes"] = codes_text
-        config["registered_users"] = users_text
-        
-        # 保存配置（使用 V2 标准方法）
-        try:
-            self.save_config(config)
-            logger.info(f"配置已更新并保存: codes={codes_text.count('\n')+1 if codes_text else 0}个, users={len(users_text.split('\n')) if users_text else 0}个")
-        except Exception as e:
-            logger.error(f"保存配置失败: {e}")
-            logger.critical("配置保存失败！手动检查MoviePilot日志")
-
     def _start_check_thread(self):
         """启动定期检查线程"""
         if self._check_thread and self._check_thread.is_alive():
@@ -236,7 +285,7 @@ class EmbyRegisterBot(_PluginBase):
                         self._send_message_sync(tg_id, "❌ 您的Emby账户已被永久删除")
         
         if need_update:
-            self.update_config()
+            self._save_data()
 
     def _send_expire_warning_sync(self, tg_id: int, days_left: int):
         """同步发送到期提醒"""
@@ -441,8 +490,8 @@ class EmbyRegisterBot(_PluginBase):
             # 删除已使用的注册码
             del self._register_codes[register_code]
             
-            # 保存配置
-            self.update_config()
+            # 保存数据
+            self._save_data()
             
             await update.message.reply_text(
                 f"✅ 注册成功!\n\n"
@@ -536,8 +585,8 @@ class EmbyRegisterBot(_PluginBase):
         # 删除已使用的注册码
         del self._register_codes[register_code]
         
-        # 保存配置
-        self.update_config()
+        # 保存数据
+        self._save_data()
         
         await update.message.reply_text(
             f"✅ 续期成功!\n\n"
@@ -633,7 +682,7 @@ class EmbyRegisterBot(_PluginBase):
             return
         
         self._register_codes[code] = days
-        self.update_config()
+        self._save_data()
         
         await update.message.reply_text(f"✅ 已添加注册码: {code} ({days}天)")
         logger.info(f"管理员添加注册码: {code}, {days}天")
@@ -965,7 +1014,7 @@ class EmbyRegisterBot(_PluginBase):
                                         'props': {
                                             'model': 'registered_users',
                                             'label': '已注册用户',
-                                            'placeholder': '格式: @TG用户名,TGID,注册时间,expire_time,Emby用户名,EmbyID,状态\n示例:\n@user123,1234567890,2026-01-05 10:00:00,2026-02-05 10:00:00,myname,abc123,active\n⚠️ 删除此处的行将同时删除Emby账户!\n此区域会自动更新,请勿手动编辑\n格式已更新为绝对expire_time，请手动迁移旧数据\n调试: 检查日志中 "配置已更新并保存" (保存方法已修复为 save_config)',
+                                            'placeholder': '格式: @TG用户名,TGID,注册时间,expire_time,Emby用户名,EmbyID,状态\n示例:\n@user123,1234567890,2026-01-05 10:00:00,2026-02-05 10:00:00,myname,abc123,active\n⚠️ 删除此处的行将同时删除Emby账户!\n此区域会自动更新,请勿手动编辑\n格式已更新为绝对expire_time，请手动迁移旧数据\n调试: 检查日志中 "运行时数据保存成功"',
                                             'rows': 10,
                                             'readonly': True
                                         }
@@ -986,7 +1035,7 @@ class EmbyRegisterBot(_PluginBase):
                                         'props': {
                                             'type': 'info',
                                             'variant': 'tonal',
-                                            'text': '✨ 数据自动持久化到MP配置中\n📝 用户通过命令注册: /register <用户名> <注册码>\n⏰ 到期前自动提醒,到期后禁用,7天后删除\n🔧 管理员可通过 /admin 查看所有用户状态\n💾 所有操作会自动保存到配置\n🔍 若注册失败,检查日志 (搜索 "Emby 查询响应" 或 "JSON data type")'
+                                            'text': '✨ 数据自动持久化到MP配置中\n📝 用户通过命令注册: /register <用户名> <注册码>\n⏰ 到期前自动提醒,到期后禁用,7天后删除\n🔧 管理员可通过 /admin 查看所有用户状态\n💾 所有操作会自动保存到配置\n🔍 若注册失败,检查日志 (搜索 "Emby 查询响应" 或 "运行时数据保存")'
                                         }
                                     }
                                 ]
