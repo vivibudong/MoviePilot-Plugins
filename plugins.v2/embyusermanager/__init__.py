@@ -355,51 +355,51 @@ class EmbyUserManager(_PluginBase):
                                         'props': {
                                             'model': 'expire_remind_days',
                                             'label': '到期提醒天数',
-                                            'placeholder': '7,3,1（逗号分隔）'
+                                            'placeholder': '7,3,1(逗号分隔)'
                                         }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VRow',
-                                'content': [
-                                    {
-                                        'component': 'VCol',
-                                        'props': {
-                                            'cols': 12,
-                                            'md': 6
-                                        },
-                                        'content': [
-                                            {
-                                                'component': 'VTextField',
-                                                'props': {
-                                                    'model': 'bot_source_name',
-                                                    'label': 'Bot来源名称',
-                                                    'placeholder': '填写通知渠道中配置的Bot名称,如: TG通知'
-                                                }
-                                            }
-                                        ]
-                                    },
-                                    {
-                                        'component': 'VCol',
-                                        'props': {
-                                            'cols': 12,
-                                            'md': 6
-                                        },
-                                        'content': [
-                                            {
-                                                'component': 'VSwitch',
-                                                'props': {
-                                                    'model': 'auto_delete_expired',
-                                                    'label': '自动删除过期用户',
-                                                }
-                                            }
-                                        ]
                                     }
                                 ]
                             }
                         ]
                     },
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 6
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VTextField',
+                                        'props': {
+                                            'model': 'bot_source_name',
+                                            'label': 'Bot来源名称',
+                                            'placeholder': '填写通知渠道中配置的Bot名称,如: TG通知'
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 6
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VSwitch',
+                                        'props': {
+                                            'model': 'auto_delete_expired',
+                                            'label': '自动删除过期用户',
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    },                                        
                     {
                         'component': 'VRow',
                         'content': [
