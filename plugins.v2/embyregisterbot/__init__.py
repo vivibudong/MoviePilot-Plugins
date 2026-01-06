@@ -416,8 +416,13 @@ class EmbyRegisterBot(_PluginBase):
         
         days = self._register_codes[register_code]
         
-        # 创建Emby用户
-        success, emby_user_id, message = self._create_emby_user(emby_username)
+        try:
+            # 创建Emby用户
+            success, emby_user_id, message = self._create_emby_user(emby_username)
+        except Exception as e:
+            logger.error(f"注册Emby用户异常: {str(e)}")
+            await update.message.reply_text(f"❌ 注册异常: {str(e)}")
+            return
         
         if success:
             # 保存用户数据
@@ -642,18 +647,26 @@ class EmbyRegisterBot(_PluginBase):
             headers = {"X-Emby-Token": self._emby_api_key}
             response = requests.get(url, headers=headers, timeout=10)
             
+            logger.debug(f"Emby 查询响应状态: {response.status_code}, 类型: {type(response.json())}")  # 调试日志
+            
             if response.status_code == 200:
                 json_data = response.json()
-                # 鲁棒处理：可能是dict with 'Items' 或直接 list
+                # 鲁棒解析：优先 'Items'，fallback 到直接 list 或空
                 if isinstance(json_data, dict):
                     users = json_data.get("Items", [])
                 elif isinstance(json_data, list):
                     users = json_data
                 else:
                     users = []
+                    logger.warning(f"意外的 JSON 类型: {type(json_data)}")
+                
+                logger.debug(f"解析用户列表长度: {len(users)}")  # 调试
                 
                 for user in users:
-                    if isinstance(user, dict) and user.get("Name") == username:
+                    if not isinstance(user, dict):
+                        logger.warning(f"用户项非 dict 类型: {type(user)}，跳过")
+                        continue
+                    if user.get("Name") == username:
                         # 已存在，复用
                         return True, user["Id"], "用户已存在，复用成功"
             
@@ -664,6 +677,8 @@ class EmbyRegisterBot(_PluginBase):
             
             if response.status_code == 200:
                 user_data = response.json()
+                if not isinstance(user_data, dict) or "Id" not in user_data:
+                    return False, "", f"创建响应无效: {response.text[:200]}"
                 user_id = user_data["Id"]
                 
                 # 如果有模板用户,复制其配置
