@@ -9,6 +9,7 @@ from app.log import logger
 from app.plugins import _PluginBase
 from app.schemas.types import EventType
 
+# 需要安装: pip install python-telegram-bot requests nest-asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -110,12 +111,29 @@ class EmbyRegisterBot(_PluginBase):
                 
                 # 回调查询处理器
                 self._application.add_handler(CallbackQueryHandler(self._button_callback))
+                
+                # 添加通用消息处理器用于调试
+                async def debug_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+                    logger.info(f"收到消息: {update}")
+                    if update.message:
+                        logger.info(f"消息文本: {update.message.text}")
+                        logger.info(f"用户: {update.effective_user.id} - {update.effective_user.username}")
+                
+                self._application.add_handler(MessageHandler(filters.ALL, debug_handler))
 
                 logger.info("Telegram Bot 启动成功，开始轮询...")
                 
                 # 在事件循环中运行轮询
                 loop.run_until_complete(self._application.initialize())
                 loop.run_until_complete(self._application.start())
+                
+                # 获取bot信息用于验证
+                try:
+                    bot_info = loop.run_until_complete(self._application.bot.get_me())
+                    logger.info(f"Bot信息 - 用户名: @{bot_info.username}, ID: {bot_info.id}, 名称: {bot_info.first_name}")
+                except Exception as e:
+                    logger.error(f"获取bot信息失败: {e}")
+                
                 loop.run_until_complete(self._application.updater.start_polling(
                     allowed_updates=Update.ALL_TYPES,
                     drop_pending_updates=True
@@ -157,6 +175,8 @@ class EmbyRegisterBot(_PluginBase):
     
     async def _cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """处理 /start 命令"""
+        logger.info(f"收到 /start 命令 - 用户ID: {update.effective_user.id}, 用户名: {update.effective_user.username}")
+        
         keyboard = [
             [InlineKeyboardButton("📝 注册账号", callback_data="register")],
             [InlineKeyboardButton("ℹ️ 查询信息", callback_data="info")],
@@ -171,6 +191,7 @@ class EmbyRegisterBot(_PluginBase):
             f"请选择功能：",
             reply_markup=reply_markup
         )
+        logger.info("已发送欢迎消息")
 
     async def _cmd_register(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """处理 /register 命令 - 注册新用户"""
