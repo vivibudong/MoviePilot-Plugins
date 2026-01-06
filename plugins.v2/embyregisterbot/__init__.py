@@ -9,7 +9,6 @@ from app.log import logger
 from app.plugins import _PluginBase
 from app.schemas.types import EventType
 
-# 需要安装: pip install python-telegram-bot requests
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -20,6 +19,10 @@ from telegram.ext import (
     ContextTypes
 )
 import requests
+import nest_asyncio
+
+# 允许嵌套事件循环
+nest_asyncio.apply()
 
 
 class EmbyRegisterBot(_PluginBase):
@@ -28,7 +31,7 @@ class EmbyRegisterBot(_PluginBase):
     # 插件描述
     plugin_desc = "通过独立TG Bot管理Emby用户，支持注册、续期、查询等功能"
     # 插件版本
-    plugin_version = "0.1"
+    plugin_version = "0.2"
     # 插件作者
     plugin_author = "Vivi"
     # 作者主页
@@ -48,6 +51,7 @@ class EmbyRegisterBot(_PluginBase):
     _bot_thread = None
     _application = None
     _user_data = {}  # 存储用户数据 {tg_user_id: {"emby_user_id": "", "expire_date": ""}}
+    _stop_event = None
 
     def init_plugin(self, config: dict = None):
         """初始化插件"""
@@ -62,6 +66,10 @@ class EmbyRegisterBot(_PluginBase):
             ]
             self._default_days = int(config.get("default_days", 30))
 
+        # 停止旧的bot
+        if self._bot_thread and self._bot_thread.is_alive():
+            self._stop_bot()
+
         if self._enabled and self._telegram_token:
             self._start_bot()
 
@@ -71,14 +79,22 @@ class EmbyRegisterBot(_PluginBase):
             logger.info("Telegram Bot 已在运行中")
             return
 
+        self._stop_event = threading.Event()
+
         def run_bot():
             try:
-                # 创建新的事件循环
+                logger.info("正在初始化 Telegram Bot...")
+                
+                # 创建新的事件循环并设置为当前线程的事件循环
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 
                 # 创建Application
-                self._application = Application.builder().token(self._telegram_token).build()
+                self._application = (
+                    Application.builder()
+                    .token(self._telegram_token)
+                    .build()
+                )
 
                 # 注册命令处理器
                 self._application.add_handler(CommandHandler("start", self._cmd_start))
@@ -96,29 +112,46 @@ class EmbyRegisterBot(_PluginBase):
                 self._application.add_handler(CallbackQueryHandler(self._button_callback))
 
                 logger.info("Telegram Bot 启动成功，开始轮询...")
-                # 启动轮询
-                self._application.run_polling(allowed_updates=Update.ALL_TYPES)
+                
+                # 在事件循环中运行轮询
+                loop.run_until_complete(self._application.initialize())
+                loop.run_until_complete(self._application.start())
+                loop.run_until_complete(self._application.updater.start_polling(
+                    allowed_updates=Update.ALL_TYPES,
+                    drop_pending_updates=True
+                ))
+                
+                logger.info("Telegram Bot 正在运行...")
+                
+                # 保持运行直到收到停止信号
+                while not self._stop_event.is_set():
+                    self._stop_event.wait(timeout=1)
+                
+                # 停止bot
+                logger.info("正在停止 Telegram Bot...")
+                loop.run_until_complete(self._application.updater.stop())
+                loop.run_until_complete(self._application.stop())
+                loop.run_until_complete(self._application.shutdown())
+                loop.close()
+                logger.info("Telegram Bot 已停止")
                 
             except Exception as e:
-                logger.error(f"Telegram Bot 运行错误: {str(e)}")
+                logger.error(f"Telegram Bot 运行错误: {str(e)}", exc_info=True)
 
         # 在新线程中运行bot
-        self._bot_thread = threading.Thread(target=run_bot, daemon=True)
+        self._bot_thread = threading.Thread(target=run_bot, daemon=True, name="EmbyBotThread")
         self._bot_thread.start()
         logger.info("Telegram Bot 线程已启动")
 
     def _stop_bot(self):
         """停止Telegram Bot"""
-        if self._application:
-            try:
-                # 停止轮询
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                loop.run_until_complete(self._application.stop())
-                loop.run_until_complete(self._application.shutdown())
-                logger.info("Telegram Bot 已停止")
-            except Exception as e:
-                logger.error(f"停止 Telegram Bot 错误: {str(e)}")
+        if self._stop_event:
+            logger.info("发送停止信号到 Telegram Bot...")
+            self._stop_event.set()
+            
+        if self._bot_thread and self._bot_thread.is_alive():
+            self._bot_thread.join(timeout=5)
+            logger.info("Telegram Bot 线程已停止")
 
     # ===== Telegram 命令处理器 =====
     
@@ -328,7 +361,9 @@ class EmbyRegisterBot(_PluginBase):
         
         data = query.data
         
+        # 创建一个新的update对象用于命令处理
         if data == "register":
+            # 模拟message对象
             await self._cmd_register(update, context)
         elif data == "info":
             await self._cmd_info(update, context)
@@ -441,7 +476,7 @@ class EmbyRegisterBot(_PluginBase):
                                         'props': {
                                             'model': 'emby_host',
                                             'label': 'Emby服务器地址',
-                                            'placeholder': 'http://localhost:8096',
+                                            'placeholder': 'http://emby:8096',
                                         }
                                     }
                                 ]
@@ -513,7 +548,7 @@ class EmbyRegisterBot(_PluginBase):
                                         'props': {
                                             'type': 'info',
                                             'variant': 'tonal',
-                                            'text': '本插件使用独立的Telegram Bot，不会与MP通知渠道冲突'
+                                            'text': '✨ 本插件使用独立的Telegram Bot，完全不依赖MP通知渠道'
                                         }
                                     }
                                 ]
@@ -525,7 +560,7 @@ class EmbyRegisterBot(_PluginBase):
         ], {
             "enabled": False,
             "telegram_token": "",
-            "emby_host": "http://localhost:8096",
+            "emby_host": "http://emby:8096",
             "emby_api_key": "",
             "admin_user_ids": "",
             "default_days": 30
