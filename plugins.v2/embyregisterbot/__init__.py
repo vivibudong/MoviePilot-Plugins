@@ -175,7 +175,6 @@ class EmbyRegisterBot(_PluginBase):
                 if attempt == 2:
                     logger.critical("配置保存3次失败！手动检查MoviePilot日志")
                 threading.Event().wait(1)  # 等待1s重试
-        logger.info("配置已更新并保存")
 
     def _start_check_thread(self):
         """启动定期检查线程"""
@@ -644,9 +643,17 @@ class EmbyRegisterBot(_PluginBase):
             response = requests.get(url, headers=headers, timeout=10)
             
             if response.status_code == 200:
-                users = response.json().get("Items", [])
+                json_data = response.json()
+                # 鲁棒处理：可能是dict with 'Items' 或直接 list
+                if isinstance(json_data, dict):
+                    users = json_data.get("Items", [])
+                elif isinstance(json_data, list):
+                    users = json_data
+                else:
+                    users = []
+                
                 for user in users:
-                    if user["Name"] == username:
+                    if isinstance(user, dict) and user.get("Name") == username:
                         # 已存在，复用
                         return True, user["Id"], "用户已存在，复用成功"
             
@@ -665,7 +672,7 @@ class EmbyRegisterBot(_PluginBase):
                 
                 return True, user_id, "创建成功"
             else:
-                return False, "", f"API返回错误: {response.status_code} - {response.text[:100]}"
+                return False, "", f"API返回错误: {response.status_code} - {response.text[:200]}"
                 
         except Exception as e:
             logger.error(f"创建Emby用户失败: {str(e)}")
