@@ -25,7 +25,7 @@ nest_asyncio.apply()
 class EmbyRegisterBot(_PluginBase):
     plugin_name = "Emby用户管理器"
     plugin_desc = "通过独立TG Bot管理Emby用户，支持注册码、续期、到期管理等"
-    plugin_version = "0.1"
+    plugin_version = "1.0"
     plugin_author = "Vivi"
     author_url = "<https://github.com/vivibudong>"
     plugin_config_prefix = "embyregisterbot"
