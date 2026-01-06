@@ -102,53 +102,48 @@ class EmbyRegisterBot(_PluginBase):
             if not line:
                 continue
             try:
-                # 格式: @username,tgid,注册时间,剩余天数,emby用户名,emby_user_id,状态
+                # 新格式: @username,tgid,注册时间,expire_time,emby用户名,emby_user_id,状态
                 parts = [p.strip() for p in line.split(",")]
-                if len(parts) >= 7:
-                    tg_username = parts[0]
-                    tg_id = int(parts[1])
-                    register_time = parts[2]
-                    days_left = int(parts[3])
-                    emby_username = parts[4]
-                    emby_user_id = parts[5]
-                    status = parts[6]
+                if len(parts) < 7:
+                    continue
+                tg_username = parts[0]
+                tg_id = int(parts[1])
+                register_time = parts[2]
+                expire_time_str = parts[3]  # 绝对时间
+                emby_username = parts[4]
+                emby_user_id = parts[5]
+                status = parts[6]
+                
+                # 直接用expire_time，不计算
+                self._registered_users[tg_id] = {
+                    "tg_username": tg_username,
+                    "emby_username": emby_username,
+                    "emby_user_id": emby_user_id,
+                    "register_time": register_time,
+                    "expire_time": expire_time_str,
+                    "status": status
+                }
+                
+                if status == "disabled" and len(parts) >= 8:
+                    self._registered_users[tg_id]["disabled_time"] = parts[7]
                     
-                    # 计算到期时间
-                    now = datetime.now()
-                    expire_dt = now + timedelta(days=days_left)
-                    
-                    self._registered_users[tg_id] = {
-                        "tg_username": tg_username,
-                        "emby_username": emby_username,
-                        "emby_user_id": emby_user_id,
-                        "register_time": register_time,
-                        "expire_time": expire_dt.strftime("%Y-%m-%d %H:%M:%S"),
-                        "status": status
-                    }
-                    
-                    if status == "disabled" and len(parts) >= 8:
-                        self._registered_users[tg_id]["disabled_time"] = parts[7]
-                        
             except Exception as e:
                 logger.warning(f"解析用户信息失败: {line}, 错误: {e}")
 
     def _generate_config_text(self) -> Tuple[str, str]:
         """生成配置文本"""
-        # 生成注册码文本
+        # 生成注册码文本（不变）
         codes_text = "\n".join([f"{code},{days}" for code, days in self._register_codes.items()])
         
-        # 生成已注册用户文本
+        # 生成已注册用户文本（用绝对expire_time）
         users_lines = []
         for tg_id, info in self._registered_users.items():
             if info["status"] == "deleted":
                 continue
             
-            expire_dt = datetime.strptime(info["expire_time"], "%Y-%m-%d %H:%M:%S")
-            days_left = max(0, (expire_dt - datetime.now()).days)
-            
             line = (
                 f"{info['tg_username']},{tg_id},{info['register_time']},"
-                f"{days_left},{info['emby_username']},{info['emby_user_id']},{info['status']}"
+                f"{info['expire_time']},{info['emby_username']},{info['emby_user_id']},{info['status']}"
             )
             
             if info["status"] == "disabled" and "disabled_time" in info:
@@ -169,8 +164,17 @@ class EmbyRegisterBot(_PluginBase):
         config["register_codes"] = codes_text
         config["registered_users"] = users_text
         
-        # 保存配置
-        self.update_config_data(config)
+        # 保存配置（加重试）
+        for attempt in range(3):
+            try:
+                self.update_config_data(config)
+                logger.info(f"配置已更新并保存 (尝试{attempt+1}): codes={codes_text.count('\n')+1 if codes_text else 0}个, users={len(users_text.split('\n')) if users_text else 0}个")
+                break
+            except Exception as e:
+                logger.error(f"保存配置失败 (尝试{attempt+1}): {e}")
+                if attempt == 2:
+                    logger.critical("配置保存3次失败！手动检查MoviePilot日志")
+                threading.Event().wait(1)  # 等待1s重试
         logger.info("配置已更新并保存")
 
     def _start_check_thread(self):
@@ -632,12 +636,23 @@ class EmbyRegisterBot(_PluginBase):
     # ===== Emby API 交互方法 =====
     
     def _create_emby_user(self, username: str) -> Tuple[bool, str, str]:
-        """创建Emby用户"""
+        """创建Emby用户（幂等：存在则复用）"""
         try:
-            url = f"{self._emby_host}/emby/Users/New"
+            # 先查用户是否存在
+            url = f"{self._emby_host}/emby/Users?search={username}"
             headers = {"X-Emby-Token": self._emby_api_key}
-            data = {"Name": username}
+            response = requests.get(url, headers=headers, timeout=10)
             
+            if response.status_code == 200:
+                users = response.json().get("Items", [])
+                for user in users:
+                    if user["Name"] == username:
+                        # 已存在，复用
+                        return True, user["Id"], "用户已存在，复用成功"
+            
+            # 不存在，创建
+            url = f"{self._emby_host}/emby/Users/New"
+            data = {"Name": username}
             response = requests.post(url, headers=headers, json=data, timeout=10)
             
             if response.status_code == 200:
@@ -650,7 +665,7 @@ class EmbyRegisterBot(_PluginBase):
                 
                 return True, user_id, "创建成功"
             else:
-                return False, "", f"API返回错误: {response.status_code}"
+                return False, "", f"API返回错误: {response.status_code} - {response.text[:100]}"
                 
         except Exception as e:
             logger.error(f"创建Emby用户失败: {str(e)}")
@@ -895,7 +910,7 @@ class EmbyRegisterBot(_PluginBase):
                                         'props': {
                                             'model': 'registered_users',
                                             'label': '已注册用户',
-                                            'placeholder': '格式: @TG用户名,TGID,注册时间,剩余天数,Emby用户名,EmbyID,状态\n⚠️ 删除此处的行将同时删除Emby账户!\n此区域会自动更新,请勿手动编辑',
+                                            'placeholder': '格式: @TG用户名,TGID,注册时间,expire_time,Emby用户名,EmbyID,状态\n示例:\n@user123,1234567890,2026-01-05 10:00:00,2026-02-05 10:00:00,myname,abc123,active\n⚠️ 删除此处的行将同时删除Emby账户!\n此区域会自动更新,请勿手动编辑\n格式已更新为绝对expire_time，请手动迁移旧数据',
                                             'rows': 10,
                                             'readonly': True
                                         }
