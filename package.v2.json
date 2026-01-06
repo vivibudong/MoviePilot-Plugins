@@ -13,6 +13,16 @@
       "v0.1": "修复bug",
       "v0.0.1": "第一版修改自豆瓣想看"
     }
+  "EmbyRegisterBot": {
+    "name": "Emby用户管理器",
+    "description": "通过独立TG Bot管理Emby用户，支持注册、续期、查询等功能",
+    "labels": "工具",
+    "version": "0.1",
+    "author": "Vivi",
+    "level": 2,
+    "history": {
+      "v0.1": "创建插件"
+    }
   },
   "EmbyPlaybackReport": {
     "name": "Emby观影报告推送",
