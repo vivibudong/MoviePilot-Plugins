@@ -27,7 +27,7 @@ nest_asyncio.apply()
 class EmbyRegisterBot(_PluginBase):
     plugin_name = "Emby用户管理器"
     plugin_desc = "通过独立TG Bot管理Emby用户,支持注册、续期、查询等功能"
-    plugin_version = "0.1"
+    plugin_version = "0.1.1"  # 更新版本号，便于追踪
     plugin_author = "Vivi"
     author_url = "https://github.com/vivibudong"
     plugin_config_prefix = "embyregisterbot"
@@ -392,6 +392,8 @@ class EmbyRegisterBot(_PluginBase):
         user_id = update.effective_user.id
         username = update.effective_user.username or f"user_{user_id}"
         
+        logger.info(f"收到 /register 命令 - 用户ID: {user_id}, 参数: {context.args}")  # 加日志
+        
         # 检查是否已注册
         if user_id in self._registered_users and self._registered_users[user_id]["status"] != "deleted":
             await update.message.reply_text("❌ 您已经注册过了,请使用 /info 查询信息")
@@ -416,11 +418,13 @@ class EmbyRegisterBot(_PluginBase):
         
         days = self._register_codes[register_code]
         
+        logger.info(f"开始创建 Emby 用户: {emby_username}, 注册码: {register_code}, 天数: {days}")  # 加日志
+        
         try:
             # 创建Emby用户
             success, emby_user_id, message = self._create_emby_user(emby_username)
         except Exception as e:
-            logger.error(f"注册Emby用户异常: {str(e)}")
+            logger.error(f"注册Emby用户异常 (TG用户 {user_id}): {str(e)}")
             await update.message.reply_text(f"❌ 注册异常: {str(e)}")
             return
         
@@ -454,6 +458,7 @@ class EmbyRegisterBot(_PluginBase):
             )
             logger.info(f"用户注册成功: TG={user_id}, Emby={emby_username}")
         else:
+            logger.error(f"注册失败 (TG用户 {user_id}): {message}")  # 加日志
             await update.message.reply_text(f"❌ 注册失败: {message}")
 
     async def _cmd_info(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -647,10 +652,14 @@ class EmbyRegisterBot(_PluginBase):
             headers = {"X-Emby-Token": self._emby_api_key}
             response = requests.get(url, headers=headers, timeout=10)
             
-            logger.debug(f"Emby 查询响应状态: {response.status_code}, 类型: {type(response.json())}")  # 调试日志
+            logger.info(f"Emby 查询响应状态: {response.status_code}")  # 调试日志
+            if response.status_code != 200:
+                logger.warning(f"Emby 查询非200响应: {response.status_code}, text: {response.text[:100]}")
             
             if response.status_code == 200:
                 json_data = response.json()
+                logger.info(f"JSON data type: {type(json_data)}, content preview: {str(json_data)[:200]}")  # 关键调试日志
+                
                 # 鲁棒解析：优先 'Items'，fallback 到直接 list 或空
                 if isinstance(json_data, dict):
                     users = json_data.get("Items", [])
@@ -658,40 +667,62 @@ class EmbyRegisterBot(_PluginBase):
                     users = json_data
                 else:
                     users = []
-                    logger.warning(f"意外的 JSON 类型: {type(json_data)}")
+                    logger.warning(f"意外的 JSON 类型: {type(json_data)}, 设为空列表")
                 
-                logger.debug(f"解析用户列表长度: {len(users)}")  # 调试
+                logger.info(f"解析用户列表长度: {len(users)}")  # 调试
                 
+                found = False
                 for user in users:
                     if not isinstance(user, dict):
-                        logger.warning(f"用户项非 dict 类型: {type(user)}，跳过")
+                        logger.warning(f"用户项非 dict 类型: {type(user)}, 跳过 (内容预览: {str(user)[:50]})")
                         continue
                     if user.get("Name") == username:
+                        logger.info(f"找到现有用户: ID={user.get('Id')}")
                         # 已存在，复用
                         return True, user["Id"], "用户已存在，复用成功"
+                        found = True
+                        break
+                
+                if not found:
+                    logger.info("未找到现有用户，继续创建")
             
             # 不存在，创建
+            logger.info(f"开始创建新用户: {username}")
             url = f"{self._emby_host}/emby/Users/New"
             data = {"Name": username}
             response = requests.post(url, headers=headers, json=data, timeout=10)
             
+            logger.info(f"Emby 创建响应状态: {response.status_code}")  # 调试日志
+            
             if response.status_code == 200:
                 user_data = response.json()
+                logger.info(f"创建 JSON type: {type(user_data)}, preview: {str(user_data)[:200]}")  # 调试
+                
                 if not isinstance(user_data, dict) or "Id" not in user_data:
+                    logger.error(f"创建响应无效 (非dict或无Id): {response.text[:200]}")
                     return False, "", f"创建响应无效: {response.text[:200]}"
+                
                 user_id = user_data["Id"]
                 
                 # 如果有模板用户,复制其配置
                 if self._template_user_id:
-                    self._copy_user_policy(self._template_user_id, user_id)
+                    logger.info(f"复制模板用户策略: {self._template_user_id} -> {user_id}")
+                    if not self._copy_user_policy(self._template_user_id, user_id):
+                        logger.warning("复制用户策略失败，但继续")
                 
+                logger.info(f"用户创建成功: ID={user_id}")
                 return True, user_id, "创建成功"
             else:
-                return False, "", f"API返回错误: {response.status_code} - {response.text[:200]}"
+                error_msg = f"API返回错误: {response.status_code} - {response.text[:200]}"
+                logger.error(error_msg)
+                return False, "", error_msg
                 
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Emby API 请求异常: {str(e)}")
+            return False, "", f"网络/请求错误: {str(e)}"
         except Exception as e:
-            logger.error(f"创建Emby用户失败: {str(e)}")
-            return False, "", str(e)
+            logger.error(f"创建Emby用户失败: {str(e)}", exc_info=True)
+            return False, "", f"未知错误: {str(e)}"
 
     def _copy_user_policy(self, template_id: str, target_id: str) -> bool:
         """复制用户策略"""
@@ -702,16 +733,22 @@ class EmbyRegisterBot(_PluginBase):
             response = requests.get(url, headers=headers, timeout=10)
             
             if response.status_code != 200:
+                logger.warning(f"获取模板用户失败: {response.status_code}")
                 return False
             
             template_data = response.json()
+            if not isinstance(template_data, dict):
+                logger.warning(f"模板数据非dict: {type(template_data)}")
+                return False
             
             # 应用到目标用户
             url = f"{self._emby_host}/emby/Users/{target_id}/Policy"
             policy_data = template_data.get("Policy", {})
             response = requests.post(url, headers=headers, json=policy_data, timeout=10)
             
-            return response.status_code == 204
+            success = response.status_code == 204
+            logger.info(f"复制策略响应: {response.status_code}, 成功: {success}")
+            return success
             
         except Exception as e:
             logger.error(f"复制用户策略失败: {str(e)}")
@@ -860,7 +897,7 @@ class EmbyRegisterBot(_PluginBase):
                                         'props': {
                                             'model': 'emby_api_key',
                                             'label': 'Emby API Key',
-                                            'placeholder': '在Emby控制台-高级-API密钥中生成',
+                                            'placeholder': '在Emby控制台-高级-API密钥中生成 (确保有Users权限)',
                                         }
                                     }
                                 ]
@@ -893,7 +930,7 @@ class EmbyRegisterBot(_PluginBase):
                                         'props': {
                                             'model': 'template_user_id',
                                             'label': 'Emby模板用户ID',
-                                            'placeholder': '可选,用于复制权限配置',
+                                            'placeholder': '可选,用于复制权限配置 (若出错可临时清空)',
                                         }
                                     }
                                 ]
@@ -932,7 +969,7 @@ class EmbyRegisterBot(_PluginBase):
                                         'props': {
                                             'model': 'registered_users',
                                             'label': '已注册用户',
-                                            'placeholder': '格式: @TG用户名,TGID,注册时间,expire_time,Emby用户名,EmbyID,状态\n示例:\n@user123,1234567890,2026-01-05 10:00:00,2026-02-05 10:00:00,myname,abc123,active\n⚠️ 删除此处的行将同时删除Emby账户!\n此区域会自动更新,请勿手动编辑\n格式已更新为绝对expire_time，请手动迁移旧数据',
+                                            'placeholder': '格式: @TG用户名,TGID,注册时间,expire_time,Emby用户名,EmbyID,状态\n示例:\n@user123,1234567890,2026-01-05 10:00:00,2026-02-05 10:00:00,myname,abc123,active\n⚠️ 删除此处的行将同时删除Emby账户!\n此区域会自动更新,请勿手动编辑\n格式已更新为绝对expire_time，请手动迁移旧数据\n调试: 检查日志中 "JSON data type" 和 "Emby 查询响应"',
                                             'rows': 10,
                                             'readonly': True
                                         }
@@ -953,7 +990,7 @@ class EmbyRegisterBot(_PluginBase):
                                         'props': {
                                             'type': 'info',
                                             'variant': 'tonal',
-                                            'text': '✨ 数据自动持久化到MP配置中\n📝 用户通过命令注册: /register <用户名> <注册码>\n⏰ 到期前自动提醒,到期后禁用,7天后删除\n🔧 管理员可通过 /admin 查看所有用户状态\n💾 所有操作会自动保存到配置'
+                                            'text': '✨ 数据自动持久化到MP配置中\n📝 用户通过命令注册: /register <用户名> <注册码>\n⏰ 到期前自动提醒,到期后禁用,7天后删除\n🔧 管理员可通过 /admin 查看所有用户状态\n💾 所有操作会自动保存到配置\n🔍 若注册失败,检查日志 (搜索 "Emby 查询响应" 或 "JSON data type")'
                                         }
                                     }
                                 ]
