@@ -134,16 +134,37 @@ class EmbyRegisterBot(_PluginBase):
                 except Exception as e:
                     logger.error(f"获取bot信息失败: {e}")
                 
-                loop.run_until_complete(self._application.updater.start_polling(
-                    allowed_updates=Update.ALL_TYPES,
-                    drop_pending_updates=True
-                ))
-                
                 logger.info("Telegram Bot 正在运行...")
                 
-                # 保持运行直到收到停止信号
+                # 手动轮询 - 更可靠的方式
+                last_update_id = 0
                 while not self._stop_event.is_set():
-                    self._stop_event.wait(timeout=1)
+                    try:
+                        # 使用事件循环获取更新
+                        updates = loop.run_until_complete(
+                            self._application.bot.get_updates(
+                                offset=last_update_id,
+                                timeout=10,
+                                allowed_updates=Update.ALL_TYPES
+                            )
+                        )
+                        
+                        if updates:
+                            logger.info(f"收到 {len(updates)} 条更新")
+                            for update in updates:
+                                last_update_id = update.update_id + 1
+                                # 处理更新
+                                loop.run_until_complete(
+                                    self._application.process_update(update)
+                                )
+                        
+                        # 检查停止信号
+                        if self._stop_event.wait(timeout=0.1):
+                            break
+                            
+                    except Exception as e:
+                        logger.error(f"轮询错误: {e}", exc_info=True)
+                        self._stop_event.wait(timeout=3)  # 出错后等待3秒再重试
                 
                 # 停止bot
                 logger.info("正在停止 Telegram Bot...")
