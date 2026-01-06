@@ -27,7 +27,7 @@ nest_asyncio.apply()
 class EmbyRegisterBot(_PluginBase):
     plugin_name = "Emby用户管理器"
     plugin_desc = "通过独立TG Bot管理Emby用户,支持注册、续期、查询等功能"
-    plugin_version = "0.1.1"  # 更新版本号，便于追踪
+    plugin_version = "0.1.2"
     plugin_author = "Vivi"
     author_url = "https://github.com/vivibudong"
     plugin_config_prefix = "embyregisterbot"
@@ -164,17 +164,13 @@ class EmbyRegisterBot(_PluginBase):
         config["register_codes"] = codes_text
         config["registered_users"] = users_text
         
-        # 保存配置（加重试）
-        for attempt in range(3):
-            try:
-                self.update_config_data(config)
-                logger.info(f"配置已更新并保存 (尝试{attempt+1}): codes={codes_text.count('\n')+1 if codes_text else 0}个, users={len(users_text.split('\n')) if users_text else 0}个")
-                break
-            except Exception as e:
-                logger.error(f"保存配置失败 (尝试{attempt+1}): {e}")
-                if attempt == 2:
-                    logger.critical("配置保存3次失败！手动检查MoviePilot日志")
-                threading.Event().wait(1)  # 等待1s重试
+        # 保存配置（使用 V2 标准方法）
+        try:
+            self.save_config(config)
+            logger.info(f"配置已更新并保存: codes={codes_text.count('\n')+1 if codes_text else 0}个, users={len(users_text.split('\n')) if users_text else 0}个")
+        except Exception as e:
+            logger.error(f"保存配置失败: {e}")
+            logger.critical("配置保存失败！手动检查MoviePilot日志")
 
     def _start_check_thread(self):
         """启动定期检查线程"""
@@ -392,7 +388,7 @@ class EmbyRegisterBot(_PluginBase):
         user_id = update.effective_user.id
         username = update.effective_user.username or f"user_{user_id}"
         
-        logger.info(f"收到 /register 命令 - 用户ID: {user_id}, 参数: {context.args}")  # 加日志
+        logger.info(f"收到 /register 命令 - 用户ID: {user_id}, 参数: {context.args}")
         
         # 检查是否已注册
         if user_id in self._registered_users and self._registered_users[user_id]["status"] != "deleted":
@@ -418,7 +414,7 @@ class EmbyRegisterBot(_PluginBase):
         
         days = self._register_codes[register_code]
         
-        logger.info(f"开始创建 Emby 用户: {emby_username}, 注册码: {register_code}, 天数: {days}")  # 加日志
+        logger.info(f"开始创建 Emby 用户: {emby_username}, 注册码: {register_code}, 天数: {days}")
         
         try:
             # 创建Emby用户
@@ -458,7 +454,7 @@ class EmbyRegisterBot(_PluginBase):
             )
             logger.info(f"用户注册成功: TG={user_id}, Emby={emby_username}")
         else:
-            logger.error(f"注册失败 (TG用户 {user_id}): {message}")  # 加日志
+            logger.error(f"注册失败 (TG用户 {user_id}): {message}")
             await update.message.reply_text(f"❌ 注册失败: {message}")
 
     async def _cmd_info(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -652,13 +648,13 @@ class EmbyRegisterBot(_PluginBase):
             headers = {"X-Emby-Token": self._emby_api_key}
             response = requests.get(url, headers=headers, timeout=10)
             
-            logger.info(f"Emby 查询响应状态: {response.status_code}")  # 调试日志
+            logger.info(f"Emby 查询响应状态: {response.status_code}")
             if response.status_code != 200:
                 logger.warning(f"Emby 查询非200响应: {response.status_code}, text: {response.text[:100]}")
             
             if response.status_code == 200:
                 json_data = response.json()
-                logger.info(f"JSON data type: {type(json_data)}, content preview: {str(json_data)[:200]}")  # 关键调试日志
+                logger.info(f"JSON data type: {type(json_data)}, content preview: {str(json_data)[:200]}")
                 
                 # 鲁棒解析：优先 'Items'，fallback 到直接 list 或空
                 if isinstance(json_data, dict):
@@ -669,7 +665,7 @@ class EmbyRegisterBot(_PluginBase):
                     users = []
                     logger.warning(f"意外的 JSON 类型: {type(json_data)}, 设为空列表")
                 
-                logger.info(f"解析用户列表长度: {len(users)}")  # 调试
+                logger.info(f"解析用户列表长度: {len(users)}")
                 
                 found = False
                 for user in users:
@@ -692,11 +688,11 @@ class EmbyRegisterBot(_PluginBase):
             data = {"Name": username}
             response = requests.post(url, headers=headers, json=data, timeout=10)
             
-            logger.info(f"Emby 创建响应状态: {response.status_code}")  # 调试日志
+            logger.info(f"Emby 创建响应状态: {response.status_code}")
             
             if response.status_code == 200:
                 user_data = response.json()
-                logger.info(f"创建 JSON type: {type(user_data)}, preview: {str(user_data)[:200]}")  # 调试
+                logger.info(f"创建 JSON type: {type(user_data)}, preview: {str(user_data)[:200]}")
                 
                 if not isinstance(user_data, dict) or "Id" not in user_data:
                     logger.error(f"创建响应无效 (非dict或无Id): {response.text[:200]}")
@@ -969,7 +965,7 @@ class EmbyRegisterBot(_PluginBase):
                                         'props': {
                                             'model': 'registered_users',
                                             'label': '已注册用户',
-                                            'placeholder': '格式: @TG用户名,TGID,注册时间,expire_time,Emby用户名,EmbyID,状态\n示例:\n@user123,1234567890,2026-01-05 10:00:00,2026-02-05 10:00:00,myname,abc123,active\n⚠️ 删除此处的行将同时删除Emby账户!\n此区域会自动更新,请勿手动编辑\n格式已更新为绝对expire_time，请手动迁移旧数据\n调试: 检查日志中 "JSON data type" 和 "Emby 查询响应"',
+                                            'placeholder': '格式: @TG用户名,TGID,注册时间,expire_time,Emby用户名,EmbyID,状态\n示例:\n@user123,1234567890,2026-01-05 10:00:00,2026-02-05 10:00:00,myname,abc123,active\n⚠️ 删除此处的行将同时删除Emby账户!\n此区域会自动更新,请勿手动编辑\n格式已更新为绝对expire_time，请手动迁移旧数据\n调试: 检查日志中 "配置已更新并保存" (保存方法已修复为 save_config)',
                                             'rows': 10,
                                             'readonly': True
                                         }
