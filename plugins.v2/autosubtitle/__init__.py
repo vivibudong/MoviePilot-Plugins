@@ -27,7 +27,7 @@ class AutoSubtitle(_PluginBase):
     # 插件描述
     plugin_desc = "自动监控视频库目录，调用伪射手字幕网assrt.net的api自动下载重命名字幕。"
     # 插件图标
-    plugin_icon = "subtitle.png"
+    plugin_icon = ""
     # 插件版本
     plugin_version = "0.1"
     # 插件作者
@@ -55,6 +55,7 @@ class AutoSubtitle(_PluginBase):
     _api_base_url: str = "https://api.assrt.net/v1"
     _last_request_time: float = 0
     _request_interval: float = 12  # 5次/分钟 = 12秒/次
+    _running: bool = False  # 运行状态标志
     
     # 支持的视频格式
     _video_formats = ['.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.rmvb', '.m4v', '.ts']
@@ -63,6 +64,9 @@ class AutoSubtitle(_PluginBase):
 
     def init_plugin(self, config: dict = None):
         """初始化插件"""
+        # 先设置运行标志为False，停止任何正在运行的任务
+        self._running = False
+        
         # 停止现有任务
         self.stop_service()
 
@@ -75,6 +79,13 @@ class AutoSubtitle(_PluginBase):
             self._api_token = config.get("api_token", "")
             self._force_download = config.get("force_download", False)
             self._cron = config.get("cron", "0 */6 * * *")
+
+        # 处理清理日志
+        if self._clear_log:
+            self.save_data('download_log', [])
+            logger.info("已清除字幕下载历史记录")
+            self._clear_log = False
+            self.__update_config()
 
         if self._enabled or self._onlyonce:
             if self._onlyonce:
@@ -89,14 +100,9 @@ class AutoSubtitle(_PluginBase):
                 if self._scheduler.get_jobs():
                     self._scheduler.print_jobs()
                     self._scheduler.start()
-
-            # 处理一次性开关
-            if self._onlyonce or self._clear_log:
+                
+                # 关闭一次性开关
                 self._onlyonce = False
-                if self._clear_log:
-                    self.save_data('download_log', [])
-                    logger.info("已清除字幕下载历史记录")
-                self._clear_log = False
                 self.__update_config()
 
     def get_state(self) -> bool:
@@ -356,11 +362,15 @@ class AutoSubtitle(_PluginBase):
     def stop_service(self):
         """退出插件"""
         try:
+            # 设置运行标志为False
+            self._running = False
+            
             if self._scheduler:
                 self._scheduler.remove_all_jobs()
                 if self._scheduler.running:
-                    self._scheduler.shutdown()
+                    self._scheduler.shutdown(wait=False)
                 self._scheduler = None
+                logger.info("字幕下载服务已停止")
         except Exception as e:
             logger.error(f"退出插件失败：{str(e)}")
 
@@ -393,29 +403,39 @@ class AutoSubtitle(_PluginBase):
                 "User-Agent": "MoviePilot AutoSubtitle Plugin"
             }
             
+            # Assrt API的正确搜索endpoint
             params = {
+                "token": self._api_token,
                 "q": clean_name,
-                "lang": "zh-cn"  # 优先中文字幕
+                "is_file": 0  # 按关键词搜索
             }
             
             response = requests.get(
                 f"{self._api_base_url}/sub/search",
-                headers=headers,
                 params=params,
+                headers=headers,
                 timeout=30
             )
             
             if response.status_code == 200:
                 data = response.json()
-                if data.get("sub") and data["sub"].get("subs"):
-                    # 返回评分最高的字幕
-                    subs = sorted(data["sub"]["subs"], 
-                                key=lambda x: float(x.get("score", 0)), 
-                                reverse=True)
-                    if subs:
-                        return subs[0]
+                # 检查返回的数据结构
+                if isinstance(data, dict) and data.get("sub") and data["sub"].get("subs"):
+                    subs = data["sub"]["subs"]
+                elif isinstance(data, list) and len(data) > 0:
+                    subs = data
+                else:
+                    logger.warning(f"搜索结果为空：{clean_name}")
+                    return None
+                
+                # 返回评分最高的字幕
+                if subs:
+                    sorted_subs = sorted(subs, 
+                                       key=lambda x: float(x.get("score", 0) or 0), 
+                                       reverse=True)
+                    return sorted_subs[0]
             else:
-                logger.warning(f"搜索字幕失败，状态码：{response.status_code}")
+                logger.warning(f"搜索字幕失败，状态码：{response.status_code}，响应：{response.text[:200]}")
                 
         except Exception as e:
             logger.error(f"搜索字幕异常：{str(e)}")
@@ -432,45 +452,40 @@ class AutoSubtitle(_PluginBase):
         try:
             sub_id = subtitle_info.get("id")
             if not sub_id:
+                logger.error("字幕信息中缺少ID")
                 return None
             
+            # Assrt API的正确下载方式
+            params = {
+                "token": self._api_token,
+                "id": sub_id
+            }
+            
             headers = {
-                "Authorization": f"Bearer {self._api_token}",
                 "User-Agent": "MoviePilot AutoSubtitle Plugin"
             }
             
+            # 直接下载字幕文件
             response = requests.get(
-                f"{self._api_base_url}/sub/detail/{sub_id}",
+                f"{self._api_base_url}/sub/download",
+                params=params,
                 headers=headers,
-                timeout=30
+                timeout=60
             )
             
             if response.status_code != 200:
-                logger.error(f"获取字幕详情失败，状态码：{response.status_code}")
+                logger.error(f"下载字幕失败，状态码：{response.status_code}，响应：{response.text[:200]}")
                 return None
             
-            detail = response.json()
-            download_url = detail.get("sub", {}).get("url")
+            # 处理下载的内容
+            content_type = response.headers.get('content-type', '').lower()
             
-            if not download_url:
-                logger.error("未找到字幕下载链接")
-                return None
-            
-            # 下载字幕文件
-            self._rate_limit()
-            sub_response = requests.get(download_url, timeout=60)
-            
-            if sub_response.status_code != 200:
-                logger.error(f"下载字幕文件失败，状态码：{sub_response.status_code}")
-                return None
-            
-            # 处理压缩包
-            content_type = sub_response.headers.get('content-type', '')
-            if 'zip' in content_type or download_url.endswith('.zip'):
-                return self._extract_subtitle_from_zip(sub_response.content, video_path)
+            # 检查是否是压缩文件
+            if 'zip' in content_type or 'compressed' in content_type:
+                return self._extract_subtitle_from_zip(response.content, video_path)
             else:
-                # 直接保存srt文件
-                return self._save_subtitle(sub_response.content, video_path)
+                # 直接保存字幕文件
+                return self._save_subtitle(response.content, video_path)
                 
         except Exception as e:
             logger.error(f"下载字幕异常：{str(e)}")
@@ -581,98 +596,121 @@ class AutoSubtitle(_PluginBase):
 
     def scan_and_download(self):
         """扫描目录并下载字幕"""
-        if not self._api_token:
-            logger.error("未配置API Token，无法下载字幕")
+        # 检查是否已经在运行
+        if self._running:
+            logger.warning("字幕下载任务正在运行中，跳过本次执行")
             return
         
-        if not self._monitor_dirs:
-            logger.warning("未配置监控目录")
-            return
+        # 设置运行标志
+        self._running = True
         
-        # 解析监控目录
-        directories = [Path(d.strip()) for d in self._monitor_dirs.split('\n') if d.strip()]
-        
-        if not directories:
-            logger.warning("监控目录列表为空")
-            return
-        
-        logger.info(f"开始扫描 {len(directories)} 个目录...")
-        download_log = self.get_data('download_log') or []
-        
-        total_videos = 0
-        success_count = 0
-        skip_count = 0
-        fail_count = 0
-        
-        for directory in directories:
-            logger.info(f"正在扫描目录：{directory}")
-            video_files = self._scan_directory(directory)
-            total_videos += len(video_files)
+        try:
+            if not self._api_token:
+                logger.error("未配置API Token，无法下载字幕")
+                return
             
-            for video_path in video_files:
-                try:
-                    # 检查是否已有mp字幕
-                    if self._check_existing_subtitle(video_path):
-                        logger.info(f"跳过（已有字幕）：{video_path.name}")
-                        skip_count += 1
-                        continue
+            if not self._monitor_dirs:
+                logger.warning("未配置监控目录")
+                return
+            
+            # 解析监控目录
+            directories = [Path(d.strip()) for d in self._monitor_dirs.split('\n') if d.strip()]
+            
+            if not directories:
+                logger.warning("监控目录列表为空")
+                return
+            
+            logger.info(f"开始扫描 {len(directories)} 个目录...")
+            download_log = self.get_data('download_log') or []
+            
+            total_videos = 0
+            success_count = 0
+            skip_count = 0
+            fail_count = 0
+            
+            for directory in directories:
+                # 检查是否需要停止
+                if not self._running:
+                    logger.info("检测到停止信号，终止任务")
+                    break
                     
-                    logger.info(f"处理视频：{video_path.name}")
-                    
-                    # 搜索字幕
-                    subtitle_info = self._search_subtitle(video_path.name)
-                    
-                    if not subtitle_info:
-                        logger.warning(f"未找到字幕：{video_path.name}")
-                        fail_count += 1
-                        download_log.append({
-                            "video_path": str(video_path),
-                            "subtitle_path": "",
-                            "status": "失败",
-                            "message": "未找到匹配的字幕",
-                            "time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        })
-                        continue
-                    
-                    # 下载字幕
-                    subtitle_path = self._download_subtitle(subtitle_info, video_path)
-                    
-                    if subtitle_path:
-                        logger.info(f"成功下载字幕：{subtitle_path.name}")
-                        success_count += 1
-                        download_log.append({
-                            "video_path": str(video_path),
-                            "subtitle_path": str(subtitle_path),
-                            "status": "成功",
-                            "message": f"字幕评分：{subtitle_info.get('score', 'N/A')}",
-                            "time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        })
-                    else:
-                        logger.error(f"下载字幕失败：{video_path.name}")
-                        fail_count += 1
-                        download_log.append({
-                            "video_path": str(video_path),
-                            "subtitle_path": "",
-                            "status": "失败",
-                            "message": "字幕下载失败",
-                            "time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        })
+                logger.info(f"正在扫描目录：{directory}")
+                video_files = self._scan_directory(directory)
+                total_videos += len(video_files)
+                
+                for video_path in video_files:
+                    # 检查是否需要停止
+                    if not self._running:
+                        logger.info("检测到停止信号，终止任务")
+                        break
                         
-                except Exception as e:
-                    logger.error(f"处理视频异常：{video_path.name}，错误：{str(e)}")
-                    fail_count += 1
-                    download_log.append({
-                        "video_path": str(video_path),
-                        "subtitle_path": "",
-                        "status": "失败",
-                        "message": f"异常：{str(e)}",
-                        "time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    })
-        
-        # 保存日志
-        self.save_data('download_log', download_log)
-        
-        logger.info(f"字幕下载任务完成！总计：{total_videos}，成功：{success_count}，跳过：{skip_count}，失败：{fail_count}")
+                    try:
+                        # 检查是否已有mp字幕
+                        if self._check_existing_subtitle(video_path):
+                            logger.info(f"跳过（已有字幕）：{video_path.name}")
+                            skip_count += 1
+                            continue
+                        
+                        logger.info(f"处理视频：{video_path.name}")
+                        
+                        # 搜索字幕
+                        subtitle_info = self._search_subtitle(video_path.name)
+                        
+                        if not subtitle_info:
+                            logger.warning(f"未找到字幕：{video_path.name}")
+                            fail_count += 1
+                            download_log.append({
+                                "video_path": str(video_path),
+                                "subtitle_path": "",
+                                "status": "失败",
+                                "message": "未找到匹配的字幕",
+                                "time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            })
+                            continue
+                        
+                        # 下载字幕
+                        subtitle_path = self._download_subtitle(subtitle_info, video_path)
+                        
+                        if subtitle_path:
+                            logger.info(f"成功下载字幕：{subtitle_path.name}")
+                            success_count += 1
+                            download_log.append({
+                                "video_path": str(video_path),
+                                "subtitle_path": str(subtitle_path),
+                                "status": "成功",
+                                "message": f"字幕评分：{subtitle_info.get('score', 'N/A')}",
+                                "time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            })
+                        else:
+                            logger.error(f"下载字幕失败：{video_path.name}")
+                            fail_count += 1
+                            download_log.append({
+                                "video_path": str(video_path),
+                                "subtitle_path": "",
+                                "status": "失败",
+                                "message": "字幕下载失败",
+                                "time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            })
+                            
+                    except Exception as e:
+                        logger.error(f"处理视频异常：{video_path.name}，错误：{str(e)}")
+                        fail_count += 1
+                        download_log.append({
+                            "video_path": str(video_path),
+                            "subtitle_path": "",
+                            "status": "失败",
+                            "message": f"异常：{str(e)}",
+                            "time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        })
+            
+            # 保存日志
+            self.save_data('download_log', download_log)
+            
+            logger.info(f"字幕下载任务完成！总计：{total_videos}，成功：{success_count}，跳过：{skip_count}，失败：{fail_count}")
+            
+        finally:
+            # 无论如何都要重置运行标志
+            self._running = False
 
     @eventmanager.register(EventType.PluginAction)
     def remote_scan(self, event: Event):
