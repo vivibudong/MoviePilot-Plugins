@@ -14,6 +14,17 @@
       "v0.0.1": "第一版修改自豆瓣想看"
     }
   },
+  "AutoSubtitle": {
+    "name": "自动字幕下载",
+    "description": "自动监控视频库目录，调用伪射手字幕网assrt.net的api自动下载重命名字幕。",
+    "labels": "字幕",
+    "version": "0.1",
+    "author": "Vivi",
+    "level": 2,
+    "history": {
+      "v0.1": "自动字幕下载"
+    }
+  },
   "EmbyPlaybackReport": {
     "name": "Emby观影报告推送",
     "description": "定时推送Emby Playback Reporting统计信息，支持每日/每周/每月报告。",
