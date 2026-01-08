@@ -27,7 +27,7 @@ class AutoSubtitle(_PluginBase):
     # 插件描述
     plugin_desc = "自动监控视频库目录，调用伪射手字幕网assrt.net的api自动下载重命名字幕。"
     # 插件图标
-    plugin_icon = ""
+    plugin_icon = "subtitle.png"
     # 插件版本
     plugin_version = "0.1"
     # 插件作者
@@ -54,7 +54,7 @@ class AutoSubtitle(_PluginBase):
     # API相关
     _api_base_url: str = "https://api.assrt.net/v1"
     _last_request_time: float = 0
-    _request_interval: float = 12  # 5次/分钟 = 12秒/次
+    _request_interval: float = 15  # 15秒搜一次，以免超出限额
     _running: bool = False  # 运行状态标志
     
     # 支持的视频格式
@@ -455,7 +455,7 @@ class AutoSubtitle(_PluginBase):
                 logger.error("字幕信息中缺少ID")
                 return None
             
-            # Assrt API的正确下载方式
+            # 第一步：获取字幕详细信息
             params = {
                 "token": self._api_token,
                 "id": sub_id
@@ -465,33 +465,117 @@ class AutoSubtitle(_PluginBase):
                 "User-Agent": "MoviePilot AutoSubtitle Plugin"
             }
             
-            # 直接下载字幕文件
+            # 调用 sub/detail 获取下载链接
             response = requests.get(
-                f"{self._api_base_url}/sub/download",
+                f"{self._api_base_url}/sub/detail",
                 params=params,
                 headers=headers,
-                timeout=60
+                timeout=30
             )
             
             if response.status_code != 200:
-                logger.error(f"下载字幕失败，状态码：{response.status_code}，响应：{response.text[:200]}")
+                logger.error(f"获取字幕详情失败，状态码：{response.status_code}，响应：{response.text[:200]}")
+                return None
+            
+            detail_data = response.json()
+            
+            # 检查返回状态
+            if detail_data.get("status") != 0:
+                logger.error(f"API返回错误：{detail_data.get('errmsg', '未知错误')}")
+                return None
+            
+            # 提取下载URL
+            subs = detail_data.get("sub", {}).get("subs", [])
+            if not subs:
+                logger.error("字幕详情中没有找到字幕数据")
+                return None
+            
+            download_url = subs[0].get("url")
+            if not download_url:
+                logger.error("字幕详情中没有找到下载链接")
+                return None
+            
+            logger.info(f"获取到字幕下载链接，准备下载...")
+            
+            # 第二步：下载字幕文件
+            self._rate_limit()
+            
+            sub_response = requests.get(download_url, headers=headers, timeout=60)
+            
+            if sub_response.status_code != 200:
+                logger.error(f"下载字幕文件失败，状态码：{sub_response.status_code}")
                 return None
             
             # 处理下载的内容
-            content_type = response.headers.get('content-type', '').lower()
+            filename = subs[0].get("filename", "")
             
             # 检查是否是压缩文件
-            if 'zip' in content_type or 'compressed' in content_type:
-                return self._extract_subtitle_from_zip(response.content, video_path)
+            if filename.endswith('.rar') or filename.endswith('.zip') or filename.endswith('.7z'):
+                return self._extract_subtitle_from_archive(sub_response.content, video_path, filename)
             else:
                 # 直接保存字幕文件
-                return self._save_subtitle(response.content, video_path)
+                return self._save_subtitle(sub_response.content, video_path)
                 
         except Exception as e:
             logger.error(f"下载字幕异常：{str(e)}")
         
         return None
 
+    def _extract_subtitle_from_archive(self, archive_content: bytes, video_path: Path, filename: str) -> Optional[Path]:
+        """从压缩包中提取字幕（支持zip和rar）"""
+        try:
+            # 尝试作为zip处理
+            if filename.endswith('.zip'):
+                return self._extract_subtitle_from_zip(archive_content, video_path)
+            
+            # 对于rar和其他格式，尝试先保存临时文件再解压
+            import tempfile
+            import subprocess
+            
+            with tempfile.NamedTemporaryFile(suffix=Path(filename).suffix, delete=False) as tmp_file:
+                tmp_file.write(archive_content)
+                tmp_path = tmp_file.name
+            
+            try:
+                # 创建临时解压目录
+                with tempfile.TemporaryDirectory() as tmp_dir:
+                    tmp_dir_path = Path(tmp_dir)
+                    
+                    # 尝试使用unrar（如果可用）
+                    if filename.endswith('.rar'):
+                        try:
+                            subprocess.run(['unrar', 'x', '-y', tmp_path, str(tmp_dir_path)], 
+                                         check=True, capture_output=True)
+                        except (subprocess.CalledProcessError, FileNotFoundError):
+                            logger.warning("无法解压rar文件（未安装unrar），尝试其他方式")
+                            return None
+                    
+                    # 查找解压后的字幕文件
+                    subtitle_files = []
+                    for ext in self._subtitle_formats:
+                        subtitle_files.extend(tmp_dir_path.rglob(f'*{ext}'))
+                    
+                    if not subtitle_files:
+                        logger.error("压缩包中未找到字幕文件")
+                        return None
+                    
+                    # 优先选择srt格式
+                    srt_files = [f for f in subtitle_files if f.suffix.lower() == '.srt']
+                    target_file = srt_files[0] if srt_files else subtitle_files[0]
+                    
+                    # 读取并保存字幕
+                    with open(target_file, 'rb') as f:
+                        subtitle_content = f.read()
+                    
+                    return self._save_subtitle(subtitle_content, video_path)
+            finally:
+                # 删除临时文件
+                Path(tmp_path).unlink(missing_ok=True)
+                
+        except Exception as e:
+            logger.error(f"解压字幕文件失败：{str(e)}")
+        
+        return None
     def _extract_subtitle_from_zip(self, zip_content: bytes, video_path: Path) -> Optional[Path]:
         """从zip压缩包中提取字幕"""
         try:
@@ -512,7 +596,7 @@ class AutoSubtitle(_PluginBase):
                 return self._save_subtitle(subtitle_content, video_path)
                 
         except Exception as e:
-            logger.error(f"解压字幕文件失败：{str(e)}")
+            logger.error(f"解压zip字幕文件失败：{str(e)}")
         
         return None
 
