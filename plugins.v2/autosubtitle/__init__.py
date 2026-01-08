@@ -50,11 +50,13 @@ class AutoSubtitle(_PluginBase):
     _api_token: str = ""
     _force_download: bool = False
     _cron: str = "0 */6 * * *"  # 默认每6小时运行一次
+    _use_proxy: bool = False
+    _proxy_url: str = ""
     
     # API相关
     _api_base_url: str = "https://api.assrt.net/v1"
     _last_request_time: float = 0
-    _request_interval: float = 15  # 15秒搜一次，以免超出限额
+    _request_interval: float = 3.5  # 20次/分钟 = 3秒/次，留0.5秒余量
     _running: bool = False  # 运行状态标志
     
     # 支持的视频格式
@@ -79,6 +81,8 @@ class AutoSubtitle(_PluginBase):
             self._api_token = config.get("api_token", "")
             self._force_download = config.get("force_download", False)
             self._cron = config.get("cron", "0 */6 * * *")
+            self._use_proxy = config.get("use_proxy", False)
+            self._proxy_url = config.get("proxy_url", "")
 
         # 处理清理日志
         if self._clear_log:
@@ -212,6 +216,45 @@ class AutoSubtitle(_PluginBase):
                     },
                     {
                         'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12, 'md': 4},
+                                'content': [{
+                                    'component': 'VSwitch',
+                                    'props': {
+                                        'model': 'force_download',
+                                        'label': '强制下载（即使已有字幕）',
+                                    }
+                                }]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12, 'md': 4},
+                                'content': [{
+                                    'component': 'VSwitch',
+                                    'props': {
+                                        'model': 'use_proxy',
+                                        'label': '使用代理',
+                                    }
+                                }]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12, 'md': 4},
+                                'content': [{
+                                    'component': 'VTextField',
+                                    'props': {
+                                        'model': 'proxy_url',
+                                        'label': '代理地址',
+                                        'placeholder': 'http://127.0.0.1:7890'
+                                    }
+                                }]
+                            }
+                        ]
+                    },
+                    {
+                        'component': 'VRow',
                         'content': [{
                             'component': 'VCol',
                             'content': [{
@@ -268,7 +311,9 @@ class AutoSubtitle(_PluginBase):
             "monitor_dirs": "",
             "api_token": "",
             "force_download": False,
-            "cron": "0 */6 * * *"
+            "cron": "0 */6 * * *",
+            "use_proxy": False,
+            "proxy_url": ""
         }
 
     def get_page(self) -> List[dict]:
@@ -356,7 +401,9 @@ class AutoSubtitle(_PluginBase):
             "monitor_dirs": self._monitor_dirs,
             "api_token": self._api_token,
             "force_download": self._force_download,
-            "cron": self._cron
+            "cron": self._cron,
+            "use_proxy": self._use_proxy,
+            "proxy_url": self._proxy_url
         })
 
     def stop_service(self):
@@ -386,6 +433,33 @@ class AutoSubtitle(_PluginBase):
         
         self._last_request_time = time.time()
 
+    def _get_session(self) -> requests.Session:
+        """获取配置好的requests session"""
+        session = requests.Session()
+        
+        # 配置代理
+        if self._use_proxy and self._proxy_url:
+            session.proxies = {
+                'http': self._proxy_url,
+                'https': self._proxy_url
+            }
+            logger.info(f"使用代理：{self._proxy_url}")
+        
+        # 配置重试
+        from requests.adapters import HTTPAdapter
+        from urllib3.util.retry import Retry
+        
+        retry_strategy = Retry(
+            total=3,
+            backoff_factor=1,
+            status_forcelist=[429, 500, 502, 503, 504],
+        )
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        session.mount("http://", adapter)
+        session.mount("https://", adapter)
+        
+        return session
+
     def _search_subtitle(self, video_name: str) -> Optional[Dict]:
         """搜索字幕"""
         if not self._api_token:
@@ -399,7 +473,6 @@ class AutoSubtitle(_PluginBase):
         
         try:
             headers = {
-                "Authorization": f"Bearer {self._api_token}",
                 "User-Agent": "MoviePilot AutoSubtitle Plugin"
             }
             
@@ -410,7 +483,8 @@ class AutoSubtitle(_PluginBase):
                 "is_file": 0  # 按关键词搜索
             }
             
-            response = requests.get(
+            session = self._get_session()
+            response = session.get(
                 f"{self._api_base_url}/sub/search",
                 params=params,
                 headers=headers,
@@ -431,8 +505,9 @@ class AutoSubtitle(_PluginBase):
                 # 返回评分最高的字幕
                 if subs:
                     sorted_subs = sorted(subs, 
-                                       key=lambda x: float(x.get("score", 0) or 0), 
+                                       key=lambda x: float(x.get("vote_score", 0) or 0), 
                                        reverse=True)
+                    logger.info(f"找到 {len(subs)} 个字幕，选择评分最高的")
                     return sorted_subs[0]
             else:
                 logger.warning(f"搜索字幕失败，状态码：{response.status_code}，响应：{response.text[:200]}")
@@ -465,8 +540,10 @@ class AutoSubtitle(_PluginBase):
                 "User-Agent": "MoviePilot AutoSubtitle Plugin"
             }
             
+            session = self._get_session()
+            
             # 调用 sub/detail 获取下载链接
-            response = requests.get(
+            response = session.get(
                 f"{self._api_base_url}/sub/detail",
                 params=params,
                 headers=headers,
@@ -495,29 +572,56 @@ class AutoSubtitle(_PluginBase):
                 logger.error("字幕详情中没有找到下载链接")
                 return None
             
-            logger.info(f"获取到字幕下载链接，准备下载...")
+            logger.info(f"获取到字幕下载链接：{download_url[:100]}...")
             
-            # 第二步：下载字幕文件
+            # 第二步：下载字幕文件（增加重试和超时处理）
             self._rate_limit()
             
-            sub_response = requests.get(download_url, headers=headers, timeout=60)
-            
-            if sub_response.status_code != 200:
-                logger.error(f"下载字幕文件失败，状态码：{sub_response.status_code}")
-                return None
-            
-            # 处理下载的内容
-            filename = subs[0].get("filename", "")
-            
-            # 检查是否是压缩文件
-            if filename.endswith('.rar') or filename.endswith('.zip') or filename.endswith('.7z'):
-                return self._extract_subtitle_from_archive(sub_response.content, video_path, filename)
-            else:
-                # 直接保存字幕文件
-                return self._save_subtitle(sub_response.content, video_path)
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    # 为下载请求创建新的session
+                    download_session = self._get_session()
+                    # 设置更长的超时时间
+                    sub_response = download_session.get(
+                        download_url, 
+                        headers=headers, 
+                        timeout=120,
+                        verify=True  # 验证SSL证书
+                    )
+                    
+                    if sub_response.status_code != 200:
+                        logger.error(f"下载字幕文件失败，状态码：{sub_response.status_code}")
+                        if attempt < max_retries - 1:
+                            logger.info(f"等待5秒后重试... ({attempt + 1}/{max_retries})")
+                            time.sleep(5)
+                            continue
+                        return None
+                    
+                    # 下载成功，处理内容
+                    filename = subs[0].get("filename", "")
+                    logger.info(f"字幕文件下载成功，文件名：{filename}")
+                    
+                    # 检查是否是压缩文件
+                    if filename.endswith('.rar') or filename.endswith('.zip') or filename.endswith('.7z'):
+                        return self._extract_subtitle_from_archive(sub_response.content, video_path, filename)
+                    else:
+                        # 直接保存字幕文件
+                        return self._save_subtitle(sub_response.content, video_path)
+                    
+                except requests.exceptions.RequestException as e:
+                    logger.error(f"下载字幕时网络错误 (尝试 {attempt + 1}/{max_retries}): {str(e)}")
+                    if attempt < max_retries - 1:
+                        logger.info("等待10秒后重试...")
+                        time.sleep(10)
+                    else:
+                        logger.error("达到最大重试次数，下载失败")
+                        return None
                 
         except Exception as e:
             logger.error(f"下载字幕异常：{str(e)}")
+            import traceback
+            logger.error(f"详细错误：{traceback.format_exc()}")
         
         return None
 
