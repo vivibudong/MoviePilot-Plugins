@@ -22,7 +22,7 @@ class EmbyPlaybackReport(_PluginBase):
     # 插件图标
     plugin_icon = "Emby_A.png"
     # 插件版本
-    plugin_version = "0.4"
+    plugin_version = "0.5"  # 更新版本号
     # 插件作者
     plugin_author = "Vivi"
     # 作者主页
@@ -36,6 +36,7 @@ class EmbyPlaybackReport(_PluginBase):
 
     # 私有属性
     _enabled = False
+    _notify = False  # 新增：控制是否发送通知
     _onlyonce = False
     _emby_host = None
     _emby_token = None
@@ -60,13 +61,6 @@ class EmbyPlaybackReport(_PluginBase):
     def _parse_cron_to_trigger(self, cron_str: str, report_type: str) -> Optional[CronTrigger]:
         """
         将 Cron 表达式转换为 CronTrigger,使用明确的参数避免歧义
-        
-        Args:
-            cron_str: Cron 表达式,如 "0 9 * * *"
-            report_type: 报告类型 daily/weekly/monthly
-        
-        Returns:
-            CronTrigger 对象或 None
         """
         try:
             parts = cron_str.strip().split()
@@ -97,21 +91,15 @@ class EmbyPlaybackReport(_PluginBase):
             if month != '*':
                 trigger_args['month'] = month
             
-            # 处理星期几 - 关键修复点!
+            # 处理星期几
             if day_of_week != '*':
-                # APScheduler 的 day_of_week 使用 0=Monday, 6=Sunday
-                # 但标准 Cron 使用 0=Sunday, 1=Monday, 6=Saturday
-                # 我们需要转换: Cron的1变成APScheduler的0 (Monday)
                 try:
                     dow_num = int(day_of_week)
-                    # Cron: 0=Sun,1=Mon,2=Tue,3=Wed,4=Thu,5=Fri,6=Sat
-                    # APScheduler: 0=Mon,1=Tue,2=Wed,3=Thu,4=Fri,5=Sat,6=Sun
                     if dow_num == 0:  # Cron的周日
                         trigger_args['day_of_week'] = 6  # APScheduler的周日
                     else:  # Cron的1-6 对应 APScheduler的0-5
                         trigger_args['day_of_week'] = dow_num - 1
                 except ValueError:
-                    # 如果不是数字,直接使用(可能是 mon,tue 等)
                     trigger_args['day_of_week'] = day_of_week
             
             logger.info(f"{report_type}报告 Cron解析: {cron_str} -> {trigger_args}")
@@ -125,6 +113,7 @@ class EmbyPlaybackReport(_PluginBase):
         """初始化插件"""
         if config:
             self._enabled = config.get("enabled", False)
+            self._notify = config.get("notify", False)  # 读取通知配置
             self._onlyonce = config.get("onlyonce", False)
             self._emby_host = config.get("emby_host", "")
             self._emby_token = config.get("emby_token", "")
@@ -218,6 +207,7 @@ class EmbyPlaybackReport(_PluginBase):
         """保存配置"""
         self.update_config({
             "enabled": self._enabled,
+            "notify": self._notify,  # 保存通知配置
             "onlyonce": False,
             "emby_host": self._emby_host,
             "emby_token": self._emby_token,
@@ -279,6 +269,19 @@ class EmbyPlaybackReport(_PluginBase):
                                         'props': {
                                             'model': 'enabled',
                                             'label': '启用插件',
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12, 'md': 4},
+                                'content': [
+                                    {
+                                        'component': 'VSwitch',
+                                        'props': {
+                                            'model': 'notify',  # 添加通知开关
+                                            'label': '发送通知',
                                         }
                                     }
                                 ]
@@ -588,6 +591,7 @@ class EmbyPlaybackReport(_PluginBase):
             }
         ], {
             "enabled": False,
+            "notify": True,  # 默认开启通知
             "onlyonce": False,
             "emby_host": "",
             "emby_token": "",
@@ -667,12 +671,13 @@ class EmbyPlaybackReport(_PluginBase):
                 if section:
                     report_text += section + "\n"
 
-            # 发送通知
-            self.post_message(
-                mtype=NotificationType.MediaServer,
-                title=f"📊 Emby{period_text}观影报告",
-                text=report_text
-            )
+            # 发送通知 (修改点：增加notify开关判断，并将类型修改为Plugin)
+            if self._notify:
+                self.post_message(
+                    mtype=NotificationType.Plugin,  # 修改为 Plugin 类型
+                    title=f"📊 Emby{period_text}观影报告",
+                    text=report_text
+                )
             
             logger.info(f"{period_text}观影报告生成成功")
 
