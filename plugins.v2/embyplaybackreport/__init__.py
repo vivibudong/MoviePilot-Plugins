@@ -22,7 +22,7 @@ class EmbyPlaybackReport(_PluginBase):
     # 插件图标
     plugin_icon = "Emby_A.png"
     # 插件版本
-    plugin_version = "0.3"
+    plugin_version = "0.4"
     # 插件作者
     plugin_author = "Vivi"
     # 作者主页
@@ -42,25 +42,84 @@ class EmbyPlaybackReport(_PluginBase):
     
     # 每日报告设置
     _daily_enabled = False
-    _daily_hour = 9
-    _daily_minute = 0
+    _daily_cron = None
     _daily_reports = []
     
     # 每周报告设置
     _weekly_enabled = False
-    _weekly_day = 'mon'  # 周一
-    _weekly_hour = 9
-    _weekly_minute = 0
+    _weekly_cron = None
     _weekly_reports = []
     
     # 每月报告设置
     _monthly_enabled = False
-    _monthly_day = 1  # 每月1号
-    _monthly_hour = 9
-    _monthly_minute = 0
+    _monthly_cron = None
     _monthly_reports = []
     
     _scheduler: Optional[BackgroundScheduler] = None
+
+    def _parse_cron_to_trigger(self, cron_str: str, report_type: str) -> Optional[CronTrigger]:
+        """
+        将 Cron 表达式转换为 CronTrigger,使用明确的参数避免歧义
+        
+        Args:
+            cron_str: Cron 表达式,如 "0 9 * * *"
+            report_type: 报告类型 daily/weekly/monthly
+        
+        Returns:
+            CronTrigger 对象或 None
+        """
+        try:
+            parts = cron_str.strip().split()
+            if len(parts) != 5:
+                logger.error(f"{report_type} Cron表达式格式错误: {cron_str}")
+                return None
+            
+            minute, hour, day, month, day_of_week = parts
+            
+            # 构建 CronTrigger 参数
+            trigger_args = {
+                'timezone': settings.TZ
+            }
+            
+            # 处理分钟
+            if minute != '*':
+                trigger_args['minute'] = minute
+            
+            # 处理小时
+            if hour != '*':
+                trigger_args['hour'] = hour
+            
+            # 处理日期(每月几号)
+            if day != '*':
+                trigger_args['day'] = day
+            
+            # 处理月份
+            if month != '*':
+                trigger_args['month'] = month
+            
+            # 处理星期几 - 关键修复点!
+            if day_of_week != '*':
+                # APScheduler 的 day_of_week 使用 0=Monday, 6=Sunday
+                # 但标准 Cron 使用 0=Sunday, 1=Monday, 6=Saturday
+                # 我们需要转换: Cron的1变成APScheduler的0 (Monday)
+                try:
+                    dow_num = int(day_of_week)
+                    # Cron: 0=Sun,1=Mon,2=Tue,3=Wed,4=Thu,5=Fri,6=Sat
+                    # APScheduler: 0=Mon,1=Tue,2=Wed,3=Thu,4=Fri,5=Sat,6=Sun
+                    if dow_num == 0:  # Cron的周日
+                        trigger_args['day_of_week'] = 6  # APScheduler的周日
+                    else:  # Cron的1-6 对应 APScheduler的0-5
+                        trigger_args['day_of_week'] = dow_num - 1
+                except ValueError:
+                    # 如果不是数字,直接使用(可能是 mon,tue 等)
+                    trigger_args['day_of_week'] = day_of_week
+            
+            logger.info(f"{report_type}报告 Cron解析: {cron_str} -> {trigger_args}")
+            return CronTrigger(**trigger_args)
+            
+        except Exception as e:
+            logger.error(f"{report_type}报告 Cron解析失败: {cron_str}, 错误: {e}")
+            return None
 
     def init_plugin(self, config: dict = None):
         """初始化插件"""
@@ -72,22 +131,17 @@ class EmbyPlaybackReport(_PluginBase):
             
             # 每日报告配置
             self._daily_enabled = config.get("daily_enabled", False)
-            self._daily_hour = int(config.get("daily_hour", 9))
-            self._daily_minute = int(config.get("daily_minute", 0))
+            self._daily_cron = config.get("daily_cron", "0 9 * * *")
             self._daily_reports = config.get("daily_reports", [])
             
             # 每周报告配置
             self._weekly_enabled = config.get("weekly_enabled", False)
-            self._weekly_day = str(config.get("weekly_day", "mon"))
-            self._weekly_hour = int(config.get("weekly_hour", 9))
-            self._weekly_minute = int(config.get("weekly_minute", 0))
+            self._weekly_cron = config.get("weekly_cron", "0 9 * * 1")
             self._weekly_reports = config.get("weekly_reports", [])
             
             # 每月报告配置
             self._monthly_enabled = config.get("monthly_enabled", False)
-            self._monthly_day = int(config.get("monthly_day", 1))
-            self._monthly_hour = int(config.get("monthly_hour", 9))
-            self._monthly_minute = int(config.get("monthly_minute", 0))
+            self._monthly_cron = config.get("monthly_cron", "0 9 1 * *")
             self._monthly_reports = config.get("monthly_reports", [])
 
         # 停止现有任务
@@ -111,75 +165,49 @@ class EmbyPlaybackReport(_PluginBase):
 
             if self._enabled:
                 # 添加每日报告任务
-                if self._daily_enabled:
-                    try:
-                        # 确保类型正确
-                        hour = int(self._daily_hour)
-                        minute = int(self._daily_minute)
-                        
-                        self._scheduler.add_job(
-                            func=self.report,
-                            trigger=CronTrigger(
-                                hour=hour,
-                                minute=minute,
-                                timezone=settings.TZ
-                            ),
-                            args=["daily"],
-                            name="Emby观影报告-每日"
-                        )
-                        logger.info(f"每日报告任务已配置: 每天 {hour:02d}:{minute:02d}")
-                    except Exception as err:
-                        logger.error(f"每日报告定时任务配置错误: {err}")
+                if self._daily_enabled and self._daily_cron:
+                    trigger = self._parse_cron_to_trigger(self._daily_cron, "每日")
+                    if trigger:
+                        try:
+                            self._scheduler.add_job(
+                                func=self.report,
+                                trigger=trigger,
+                                args=["daily"],
+                                name="Emby观影报告-每日"
+                            )
+                            logger.info(f"每日报告任务已添加: {self._daily_cron}")
+                        except Exception as err:
+                            logger.error(f"每日报告任务添加失败: {err}")
 
                 # 添加每周报告任务
-                if self._weekly_enabled:
-                    try:
-                        # 确保类型正确
-                        day = str(self._weekly_day)
-                        hour = int(self._weekly_hour)
-                        minute = int(self._weekly_minute)
-                        
-                        self._scheduler.add_job(
-                            func=self.report,
-                            trigger=CronTrigger(
-                                day_of_week=day,
-                                hour=hour,
-                                minute=minute,
-                                timezone=settings.TZ
-                            ),
-                            args=["weekly"],
-                            name="Emby观影报告-每周"
-                        )
-                        day_name = {
-                            'mon': '周一', 'tue': '周二', 'wed': '周三', 
-                            'thu': '周四', 'fri': '周五', 'sat': '周六', 'sun': '周日'
-                        }.get(day, day)
-                        logger.info(f"每周报告任务已配置: 每{day_name} {hour:02d}:{minute:02d}")
-                    except Exception as err:
-                        logger.error(f"每周报告定时任务配置错误: {err}")
+                if self._weekly_enabled and self._weekly_cron:
+                    trigger = self._parse_cron_to_trigger(self._weekly_cron, "每周")
+                    if trigger:
+                        try:
+                            self._scheduler.add_job(
+                                func=self.report,
+                                trigger=trigger,
+                                args=["weekly"],
+                                name="Emby观影报告-每周"
+                            )
+                            logger.info(f"每周报告任务已添加: {self._weekly_cron}")
+                        except Exception as err:
+                            logger.error(f"每周报告任务添加失败: {err}")
 
                 # 添加每月报告任务
-                if self._monthly_enabled:
-                    try:
-                        # 确保类型正确
-                        day = int(self._monthly_day)
-                        hour = int(self._monthly_hour)
-                        minute = int(self._monthly_minute)
-                        
-                        self._scheduler.add_job(
-                            func=self.report,
-                            trigger=CronTrigger(
-                                day=day,
-                                hour=hour,
-                                minute=minute,
-                                timezone=settings.TZ
-                            ),
-                            args=["monthly"],
-                            name="Emby观影报告-每月"
-                        )
-                        logger.info(f"每月报告任务已配置: 每月{day}号 {hour:02d}:{minute:02d}")
-                    except Exception as err:
-                        logger.error(f"每月报告定时任务配置错误: {err}")
+                if self._monthly_enabled and self._monthly_cron:
+                    trigger = self._parse_cron_to_trigger(self._monthly_cron, "每月")
+                    if trigger:
+                        try:
+                            self._scheduler.add_job(
+                                func=self.report,
+                                trigger=trigger,
+                                args=["monthly"],
+                                name="Emby观影报告-每月"
+                            )
+                            logger.info(f"每月报告任务已添加: {self._monthly_cron}")
+                        except Exception as err:
+                            logger.error(f"每月报告任务添加失败: {err}")
 
             if self._scheduler.get_jobs():
                 # 启动服务
@@ -194,18 +222,13 @@ class EmbyPlaybackReport(_PluginBase):
             "emby_host": self._emby_host,
             "emby_token": self._emby_token,
             "daily_enabled": self._daily_enabled,
-            "daily_hour": self._daily_hour,
-            "daily_minute": self._daily_minute,
+            "daily_cron": self._daily_cron,
             "daily_reports": self._daily_reports,
             "weekly_enabled": self._weekly_enabled,
-            "weekly_day": self._weekly_day,
-            "weekly_hour": self._weekly_hour,
-            "weekly_minute": self._weekly_minute,
+            "weekly_cron": self._weekly_cron,
             "weekly_reports": self._weekly_reports,
             "monthly_enabled": self._monthly_enabled,
-            "monthly_day": self._monthly_day,
-            "monthly_hour": self._monthly_hour,
-            "monthly_minute": self._monthly_minute,
+            "monthly_cron": self._monthly_cron,
             "monthly_reports": self._monthly_reports
         })
 
@@ -237,17 +260,6 @@ class EmbyPlaybackReport(_PluginBase):
             {'title': '⚠️ 异常用户告警', 'value': 'abnormal_user'},
             {'title': '📈 观影趋势分析', 'value': 'trend_analysis'},
             {'title': '⏰ 观影时段分布', 'value': 'time_distribution'}
-        ]
-
-        # 星期选项
-        weekday_options = [
-            {'title': '周一', 'value': 'mon'},
-            {'title': '周二', 'value': 'tue'},
-            {'title': '周三', 'value': 'wed'},
-            {'title': '周四', 'value': 'thu'},
-            {'title': '周五', 'value': 'fri'},
-            {'title': '周六', 'value': 'sat'},
-            {'title': '周日', 'value': 'sun'}
         ]
 
         return [
@@ -360,30 +372,14 @@ class EmbyPlaybackReport(_PluginBase):
                             },
                             {
                                 'component': 'VCol',
-                                'props': {'cols': 12, 'md': 4},
+                                'props': {'cols': 12, 'md': 9},
                                 'content': [
                                     {
-                                        'component': 'VTextField',
+                                        'component': 'VCronField',
                                         'props': {
-                                            'model': 'daily_hour',
-                                            'label': '小时',
-                                            'type': 'number',
-                                            'hint': '0-23'
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {'cols': 12, 'md': 4},
-                                'content': [
-                                    {
-                                        'component': 'VTextField',
-                                        'props': {
-                                            'model': 'daily_minute',
-                                            'label': '分钟',
-                                            'type': 'number',
-                                            'hint': '0-59'
+                                            'model': 'daily_cron',
+                                            'label': '执行周期',
+                                            'placeholder': '默认每天9点执行'
                                         }
                                     }
                                 ]
@@ -452,44 +448,14 @@ class EmbyPlaybackReport(_PluginBase):
                             },
                             {
                                 'component': 'VCol',
-                                'props': {'cols': 12, 'md': 3},
+                                'props': {'cols': 12, 'md': 9},
                                 'content': [
                                     {
-                                        'component': 'VSelect',
+                                        'component': 'VCronField',
                                         'props': {
-                                            'model': 'weekly_day',
-                                            'label': '星期',
-                                            'items': weekday_options
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {'cols': 12, 'md': 3},
-                                'content': [
-                                    {
-                                        'component': 'VTextField',
-                                        'props': {
-                                            'model': 'weekly_hour',
-                                            'label': '小时',
-                                            'type': 'number',
-                                            'hint': '0-23'
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {'cols': 12, 'md': 3},
-                                'content': [
-                                    {
-                                        'component': 'VTextField',
-                                        'props': {
-                                            'model': 'weekly_minute',
-                                            'label': '分钟',
-                                            'type': 'number',
-                                            'hint': '0-59'
+                                            'model': 'weekly_cron',
+                                            'label': '执行周期',
+                                            'placeholder': '默认每周一9点执行'
                                         }
                                     }
                                 ]
@@ -558,45 +524,14 @@ class EmbyPlaybackReport(_PluginBase):
                             },
                             {
                                 'component': 'VCol',
-                                'props': {'cols': 12, 'md': 3},
+                                'props': {'cols': 12, 'md': 9},
                                 'content': [
                                     {
-                                        'component': 'VTextField',
+                                        'component': 'VCronField',
                                         'props': {
-                                            'model': 'monthly_day',
-                                            'label': '日期',
-                                            'type': 'number',
-                                            'hint': '1-28(安全范围)'
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {'cols': 12, 'md': 3},
-                                'content': [
-                                    {
-                                        'component': 'VTextField',
-                                        'props': {
-                                            'model': 'monthly_hour',
-                                            'label': '小时',
-                                            'type': 'number',
-                                            'hint': '0-23'
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {'cols': 12, 'md': 3},
-                                'content': [
-                                    {
-                                        'component': 'VTextField',
-                                        'props': {
-                                            'model': 'monthly_minute',
-                                            'label': '分钟',
-                                            'type': 'number',
-                                            'hint': '0-59'
+                                            'model': 'monthly_cron',
+                                            'label': '执行周期',
+                                            'placeholder': '默认每月1号9点执行'
                                         }
                                     }
                                 ]
@@ -640,9 +575,9 @@ class EmbyPlaybackReport(_PluginBase):
                                             'type': 'info',
                                             'variant': 'tonal',
                                             'style': 'margin-top: 12px;',
-                                            'text': '💡 提示:插件通过Emby的Playback Reporting插件统计数据。'
+                                            'text': '💡 提示: 插件通过Emby的Playback Reporting插件统计数据。'
                                                     '异常用户检测基于播放行为分析,保护用户隐私,不记录IP地址。'
-                                                    '已修复Cron解析问题,使用明确的day_of_week参数。'
+                                                    '已修复Cron星期字段解析问题(Cron的1=周一,0=周日)。'
                                         }
                                     }
                                 ]
@@ -657,18 +592,13 @@ class EmbyPlaybackReport(_PluginBase):
             "emby_host": "",
             "emby_token": "",
             "daily_enabled": False,
-            "daily_hour": 9,
-            "daily_minute": 0,
+            "daily_cron": "0 9 * * *",
             "daily_reports": ["total_duration", "total_count", "type_ranking"],
             "weekly_enabled": False,
-            "weekly_day": "mon",
-            "weekly_hour": 9,
-            "weekly_minute": 0,
+            "weekly_cron": "0 9 * * 1",
             "weekly_reports": ["total_duration", "total_count", "user_ranking", "hot_media"],
             "monthly_enabled": False,
-            "monthly_day": 1,
-            "monthly_hour": 9,
-            "monthly_minute": 0,
+            "monthly_cron": "0 9 1 * *",
             "monthly_reports": ["total_duration", "total_count", "user_ranking", "hot_media", "new_media", "trend_analysis"]
         }
 
