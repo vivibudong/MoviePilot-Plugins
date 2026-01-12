@@ -18,11 +18,11 @@ class EmbyPlaybackReport(_PluginBase):
     # 插件名称
     plugin_name = "Emby观影报告推送"
     # 插件描述
-    plugin_desc = "定期统计Emby观影数据并推送通知报告，支持每日/每周/每月多维度统计"
+    plugin_desc = "定期统计Emby观影数据并推送通知报告,支持每日/每周/每月多维度统计"
     # 插件图标
     plugin_icon = "Emby_A.png"
     # 插件版本
-    plugin_version = "0.2"
+    plugin_version = "0.3"
     # 插件作者
     plugin_author = "Vivi"
     # 作者主页
@@ -42,17 +42,22 @@ class EmbyPlaybackReport(_PluginBase):
     
     # 每日报告设置
     _daily_enabled = False
-    _daily_cron = None
+    _daily_hour = 9
+    _daily_minute = 0
     _daily_reports = []
     
     # 每周报告设置
     _weekly_enabled = False
-    _weekly_cron = None
+    _weekly_day = 'mon'  # 周一
+    _weekly_hour = 9
+    _weekly_minute = 0
     _weekly_reports = []
     
     # 每月报告设置
     _monthly_enabled = False
-    _monthly_cron = None
+    _monthly_day = 1  # 每月1号
+    _monthly_hour = 9
+    _monthly_minute = 0
     _monthly_reports = []
     
     _scheduler: Optional[BackgroundScheduler] = None
@@ -67,17 +72,22 @@ class EmbyPlaybackReport(_PluginBase):
             
             # 每日报告配置
             self._daily_enabled = config.get("daily_enabled", False)
-            self._daily_cron = config.get("daily_cron", "0 9 * * *")
+            self._daily_hour = config.get("daily_hour", 9)
+            self._daily_minute = config.get("daily_minute", 0)
             self._daily_reports = config.get("daily_reports", [])
             
             # 每周报告配置
             self._weekly_enabled = config.get("weekly_enabled", False)
-            self._weekly_cron = config.get("weekly_cron", "0 9 * * 1")
+            self._weekly_day = config.get("weekly_day", "mon")
+            self._weekly_hour = config.get("weekly_hour", 9)
+            self._weekly_minute = config.get("weekly_minute", 0)
             self._weekly_reports = config.get("weekly_reports", [])
             
             # 每月报告配置
             self._monthly_enabled = config.get("monthly_enabled", False)
-            self._monthly_cron = config.get("monthly_cron", "0 9 1 * *")
+            self._monthly_day = config.get("monthly_day", 1)
+            self._monthly_hour = config.get("monthly_hour", 9)
+            self._monthly_minute = config.get("monthly_minute", 0)
             self._monthly_reports = config.get("monthly_reports", [])
 
         # 停止现有任务
@@ -88,7 +98,7 @@ class EmbyPlaybackReport(_PluginBase):
             self._scheduler = BackgroundScheduler(timezone=settings.TZ)
 
             if self._onlyonce:
-                logger.info("Emby观影报告服务启动，立即运行一次")
+                logger.info("Emby观影报告服务启动,立即运行一次")
                 self._scheduler.add_job(
                     func=self.run_all_reports,
                     trigger='date',
@@ -101,40 +111,61 @@ class EmbyPlaybackReport(_PluginBase):
 
             if self._enabled:
                 # 添加每日报告任务
-                if self._daily_enabled and self._daily_cron:
+                if self._daily_enabled:
                     try:
                         self._scheduler.add_job(
                             func=self.report,
-                            trigger=CronTrigger.from_crontab(self._daily_cron),
+                            trigger=CronTrigger(
+                                hour=self._daily_hour,
+                                minute=self._daily_minute,
+                                timezone=settings.TZ
+                            ),
                             args=["daily"],
                             name="Emby观影报告-每日"
                         )
+                        logger.info(f"每日报告任务已配置: 每天 {self._daily_hour:02d}:{self._daily_minute:02d}")
                     except Exception as err:
-                        logger.error(f"每日报告定时任务配置错误：{err}")
+                        logger.error(f"每日报告定时任务配置错误: {err}")
 
                 # 添加每周报告任务
-                if self._weekly_enabled and self._weekly_cron:
+                if self._weekly_enabled:
                     try:
                         self._scheduler.add_job(
                             func=self.report,
-                            trigger=CronTrigger.from_crontab(self._weekly_cron),
+                            trigger=CronTrigger(
+                                day_of_week=self._weekly_day,
+                                hour=self._weekly_hour,
+                                minute=self._weekly_minute,
+                                timezone=settings.TZ
+                            ),
                             args=["weekly"],
                             name="Emby观影报告-每周"
                         )
+                        day_name = {
+                            'mon': '周一', 'tue': '周二', 'wed': '周三', 
+                            'thu': '周四', 'fri': '周五', 'sat': '周六', 'sun': '周日'
+                        }.get(self._weekly_day, self._weekly_day)
+                        logger.info(f"每周报告任务已配置: 每{day_name} {self._weekly_hour:02d}:{self._weekly_minute:02d}")
                     except Exception as err:
-                        logger.error(f"每周报告定时任务配置错误：{err}")
+                        logger.error(f"每周报告定时任务配置错误: {err}")
 
                 # 添加每月报告任务
-                if self._monthly_enabled and self._monthly_cron:
+                if self._monthly_enabled:
                     try:
                         self._scheduler.add_job(
                             func=self.report,
-                            trigger=CronTrigger.from_crontab(self._monthly_cron),
+                            trigger=CronTrigger(
+                                day=self._monthly_day,
+                                hour=self._monthly_hour,
+                                minute=self._monthly_minute,
+                                timezone=settings.TZ
+                            ),
                             args=["monthly"],
                             name="Emby观影报告-每月"
                         )
+                        logger.info(f"每月报告任务已配置: 每月{self._monthly_day}号 {self._monthly_hour:02d}:{self._monthly_minute:02d}")
                     except Exception as err:
-                        logger.error(f"每月报告定时任务配置错误：{err}")
+                        logger.error(f"每月报告定时任务配置错误: {err}")
 
             if self._scheduler.get_jobs():
                 # 启动服务
@@ -149,13 +180,18 @@ class EmbyPlaybackReport(_PluginBase):
             "emby_host": self._emby_host,
             "emby_token": self._emby_token,
             "daily_enabled": self._daily_enabled,
-            "daily_cron": self._daily_cron,
+            "daily_hour": self._daily_hour,
+            "daily_minute": self._daily_minute,
             "daily_reports": self._daily_reports,
             "weekly_enabled": self._weekly_enabled,
-            "weekly_cron": self._weekly_cron,
+            "weekly_day": self._weekly_day,
+            "weekly_hour": self._weekly_hour,
+            "weekly_minute": self._weekly_minute,
             "weekly_reports": self._weekly_reports,
             "monthly_enabled": self._monthly_enabled,
-            "monthly_cron": self._monthly_cron,
+            "monthly_day": self._monthly_day,
+            "monthly_hour": self._monthly_hour,
+            "monthly_minute": self._monthly_minute,
             "monthly_reports": self._monthly_reports
         })
 
@@ -187,6 +223,17 @@ class EmbyPlaybackReport(_PluginBase):
             {'title': '⚠️ 异常用户告警', 'value': 'abnormal_user'},
             {'title': '📈 观影趋势分析', 'value': 'trend_analysis'},
             {'title': '⏰ 观影时段分布', 'value': 'time_distribution'}
+        ]
+
+        # 星期选项
+        weekday_options = [
+            {'title': '周一', 'value': 'mon'},
+            {'title': '周二', 'value': 'tue'},
+            {'title': '周三', 'value': 'wed'},
+            {'title': '周四', 'value': 'thu'},
+            {'title': '周五', 'value': 'fri'},
+            {'title': '周六', 'value': 'sat'},
+            {'title': '周日', 'value': 'sun'}
         ]
 
         return [
@@ -299,14 +346,30 @@ class EmbyPlaybackReport(_PluginBase):
                             },
                             {
                                 'component': 'VCol',
-                                'props': {'cols': 12, 'md': 9},
+                                'props': {'cols': 12, 'md': 4},
                                 'content': [
                                     {
-                                        'component': 'VCronField',
+                                        'component': 'VTextField',
                                         'props': {
-                                            'model': 'daily_cron',
-                                            'label': '执行周期',
-                                            'placeholder': '默认每天9点执行'
+                                            'model': 'daily_hour',
+                                            'label': '小时',
+                                            'type': 'number',
+                                            'hint': '0-23'
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12, 'md': 4},
+                                'content': [
+                                    {
+                                        'component': 'VTextField',
+                                        'props': {
+                                            'model': 'daily_minute',
+                                            'label': '分钟',
+                                            'type': 'number',
+                                            'hint': '0-59'
                                         }
                                     }
                                 ]
@@ -375,14 +438,44 @@ class EmbyPlaybackReport(_PluginBase):
                             },
                             {
                                 'component': 'VCol',
-                                'props': {'cols': 12, 'md': 9},
+                                'props': {'cols': 12, 'md': 3},
                                 'content': [
                                     {
-                                        'component': 'VCronField',
+                                        'component': 'VSelect',
                                         'props': {
-                                            'model': 'weekly_cron',
-                                            'label': '执行周期',
-                                            'placeholder': '默认每周一9点执行'
+                                            'model': 'weekly_day',
+                                            'label': '星期',
+                                            'items': weekday_options
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12, 'md': 3},
+                                'content': [
+                                    {
+                                        'component': 'VTextField',
+                                        'props': {
+                                            'model': 'weekly_hour',
+                                            'label': '小时',
+                                            'type': 'number',
+                                            'hint': '0-23'
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12, 'md': 3},
+                                'content': [
+                                    {
+                                        'component': 'VTextField',
+                                        'props': {
+                                            'model': 'weekly_minute',
+                                            'label': '分钟',
+                                            'type': 'number',
+                                            'hint': '0-59'
                                         }
                                     }
                                 ]
@@ -451,14 +544,45 @@ class EmbyPlaybackReport(_PluginBase):
                             },
                             {
                                 'component': 'VCol',
-                                'props': {'cols': 12, 'md': 9},
+                                'props': {'cols': 12, 'md': 3},
                                 'content': [
                                     {
-                                        'component': 'VCronField',
+                                        'component': 'VTextField',
                                         'props': {
-                                            'model': 'monthly_cron',
-                                            'label': '执行周期',
-                                            'placeholder': '默认每月1号9点执行'
+                                            'model': 'monthly_day',
+                                            'label': '日期',
+                                            'type': 'number',
+                                            'hint': '1-28(安全范围)'
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12, 'md': 3},
+                                'content': [
+                                    {
+                                        'component': 'VTextField',
+                                        'props': {
+                                            'model': 'monthly_hour',
+                                            'label': '小时',
+                                            'type': 'number',
+                                            'hint': '0-23'
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12, 'md': 3},
+                                'content': [
+                                    {
+                                        'component': 'VTextField',
+                                        'props': {
+                                            'model': 'monthly_minute',
+                                            'label': '分钟',
+                                            'type': 'number',
+                                            'hint': '0-59'
                                         }
                                     }
                                 ]
@@ -502,8 +626,9 @@ class EmbyPlaybackReport(_PluginBase):
                                             'type': 'info',
                                             'variant': 'tonal',
                                             'style': 'margin-top: 12px;',
-                                            'text': '💡 提示：插件通过Emby的Playback Reporting插件统计数据。'
-                                                    '异常用户检测基于播放行为分析，保护用户隐私，不记录IP地址。'
+                                            'text': '💡 提示:插件通过Emby的Playback Reporting插件统计数据。'
+                                                    '异常用户检测基于播放行为分析,保护用户隐私,不记录IP地址。'
+                                                    '已修复Cron解析问题,使用明确的day_of_week参数。'
                                         }
                                     }
                                 ]
@@ -518,13 +643,18 @@ class EmbyPlaybackReport(_PluginBase):
             "emby_host": "",
             "emby_token": "",
             "daily_enabled": False,
-            "daily_cron": "0 9 * * *",
+            "daily_hour": 9,
+            "daily_minute": 0,
             "daily_reports": ["total_duration", "total_count", "type_ranking"],
             "weekly_enabled": False,
-            "weekly_cron": "0 9 * * 1",
+            "weekly_day": "mon",
+            "weekly_hour": 9,
+            "weekly_minute": 0,
             "weekly_reports": ["total_duration", "total_count", "user_ranking", "hot_media"],
             "monthly_enabled": False,
-            "monthly_cron": "0 9 1 * *",
+            "monthly_day": 1,
+            "monthly_hour": 9,
+            "monthly_minute": 0,
             "monthly_reports": ["total_duration", "total_count", "user_ranking", "hot_media", "new_media", "trend_analysis"]
         }
 
@@ -541,7 +671,7 @@ class EmbyPlaybackReport(_PluginBase):
                     self._scheduler.shutdown()
                 self._scheduler = None
         except Exception as e:
-            logger.error(f"退出插件失败：{str(e)}")
+            logger.error(f"退出插件失败: {str(e)}")
 
     def run_all_reports(self):
         """立即执行所有启用的报告"""
@@ -584,7 +714,7 @@ class EmbyPlaybackReport(_PluginBase):
 
             # 生成报告内容
             report_text = f"📅 {period_text}观影报告\n"
-            report_text += f"统计周期：{start_date.strftime('%Y-%m-%d')} ~ {end_date.strftime('%Y-%m-%d')}\n"
+            report_text += f"统计周期: {start_date.strftime('%Y-%m-%d')} ~ {end_date.strftime('%Y-%m-%d')}\n"
             report_text += "=" * 40 + "\n\n"
 
             # 根据配置生成各项报告
@@ -603,7 +733,7 @@ class EmbyPlaybackReport(_PluginBase):
             logger.info(f"{period_text}观影报告生成成功")
 
         except Exception as e:
-            logger.error(f"生成{period_text}观影报告失败：{str(e)}")
+            logger.error(f"生成{period_text}观影报告失败: {str(e)}")
 
     def _generate_report_section(self, item_type: str, start: datetime, end: datetime, days: int) -> str:
         """生成报告的各个部分"""
@@ -631,7 +761,7 @@ class EmbyPlaybackReport(_PluginBase):
             elif item_type == "time_distribution":
                 return self._get_time_distribution(start, end)
         except Exception as e:
-            logger.error(f"生成报告部分 {item_type} 失败：{str(e)}")
+            logger.error(f"生成报告部分 {item_type} 失败: {str(e)}")
             return ""
 
     def _query_emby(self, query: str) -> Optional[Dict]:
@@ -654,11 +784,11 @@ class EmbyPlaybackReport(_PluginBase):
             if response.status_code == 200:
                 return response.json()
             else:
-                logger.error(f"API请求失败：{response.status_code}")
+                logger.error(f"API请求失败: {response.status_code}")
                 return None
 
         except Exception as e:
-            logger.error(f"查询数据失败：{str(e)}")
+            logger.error(f"查询数据失败: {str(e)}")
             return None
 
     def _get_total_duration(self, start: datetime, end: datetime) -> str:
@@ -673,7 +803,7 @@ class EmbyPlaybackReport(_PluginBase):
         if result and result.get("results"):
             duration = float(result["results"][0][0] or 0)
             hours = duration / 3600
-            return f"⏱️ 总播放时长：{hours:.1f} 小时"
+            return f"⏱️ 总播放时长: {hours:.1f} 小时"
         return ""
 
     def _get_total_count(self, start: datetime, end: datetime) -> str:
@@ -687,7 +817,7 @@ class EmbyPlaybackReport(_PluginBase):
         result = self._query_emby(query)
         if result and result.get("results"):
             count = int(result["results"][0][0] or 0)
-            return f"▶️ 总观看次数：{count} 次"
+            return f"▶️ 总观看次数: {count} 次"
         return ""
 
     def _get_type_ranking(self, start: datetime, end: datetime) -> str:
@@ -702,12 +832,12 @@ class EmbyPlaybackReport(_PluginBase):
         """
         result = self._query_emby(query)
         if result and result.get("results"):
-            text = "📺 内容类型排行：\n"
+            text = "📺 内容类型排行:\n"
             for item in result["results"][:5]:
                 item_type = item[0] or "Unknown"
                 count = int(item[1] or 0)
                 duration = float(item[2] or 0) / 3600
-                text += f"  · {item_type}：{count}次 ({duration:.1f}小时)\n"
+                text += f"  · {item_type}: {count}次 ({duration:.1f}小时)\n"
             return text.rstrip()
         return ""
 
@@ -724,13 +854,13 @@ class EmbyPlaybackReport(_PluginBase):
         """
         result = self._query_emby(query)
         if result and result.get("results"):
-            text = "👥 活跃用户TOP5：\n"
+            text = "👥 活跃用户TOP5:\n"
             for idx, item in enumerate(result["results"], 1):
                 username = item[0] or "Unknown"
                 play_count = int(item[1] or 0)
                 duration = float(item[2] or 0) / 3600
                 medal = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"][idx-1]
-                text += f"  {medal} {username}：{play_count}次 ({duration:.1f}小时)\n"
+                text += f"  {medal} {username}: {play_count}次 ({duration:.1f}小时)\n"
             return text.rstrip()
         return ""
 
@@ -748,7 +878,7 @@ class EmbyPlaybackReport(_PluginBase):
         """
         result = self._query_emby(query)
         if result and result.get("results"):
-            text = "🔥 热门媒体TOP10：\n"
+            text = "🔥 热门媒体TOP10:\n"
             for idx, item in enumerate(result["results"], 1):
                 name = item[0] or "Unknown"
                 item_type = item[1] or ""
@@ -761,25 +891,25 @@ class EmbyPlaybackReport(_PluginBase):
         return ""
 
     def _get_popular_client(self, start: datetime, end: datetime) -> str:
-            """获取最受欢迎客户端"""
-            query = f"""
-            SELECT ClientName, COUNT(*) as count
-            FROM PlaybackActivity 
-            WHERE DateCreated >= '{start.strftime("%Y-%m-%d 00:00:00")}' 
-            AND DateCreated <= '{end.strftime("%Y-%m-%d 23:59:59")}'
-            GROUP BY ClientName
-            ORDER BY count DESC
-            LIMIT 5
-            """
-            result = self._query_emby(query)
-            if result and result.get("results"):
-                text = "📱 最受欢迎客户端：\n"
-                for item in result["results"]:
-                    client = item[0] or "Unknown"
-                    count = int(item[1] or 0)
-                    text += f"  · {client}：{count}次\n"
-                return text.rstrip()
-            return ""
+        """获取最受欢迎客户端"""
+        query = f"""
+        SELECT ClientName, COUNT(*) as count
+        FROM PlaybackActivity 
+        WHERE DateCreated >= '{start.strftime("%Y-%m-%d 00:00:00")}' 
+        AND DateCreated <= '{end.strftime("%Y-%m-%d 23:59:59")}'
+        GROUP BY ClientName
+        ORDER BY count DESC
+        LIMIT 5
+        """
+        result = self._query_emby(query)
+        if result and result.get("results"):
+            text = "📱 最受欢迎客户端:\n"
+            for item in result["results"]:
+                client = item[0] or "Unknown"
+                count = int(item[1] or 0)
+                text += f"  · {client}: {count}次\n"
+            return text.rstrip()
+        return ""
 
     def _get_new_media(self, start: datetime, end: datetime) -> str:
         """获取新增观看媒体统计"""
@@ -792,16 +922,16 @@ class EmbyPlaybackReport(_PluginBase):
         """
         result = self._query_emby(query)
         if result and result.get("results"):
-            text = "🆕 新增观看媒体：\n"
+            text = "🆕 新增观看媒体:\n"
             for item in result["results"]:
                 item_type = item[0] or "Unknown"
                 count = int(item[1] or 0)
-                text += f"  · {item_type}：{count}部\n"
+                text += f"  · {item_type}: {count}部\n"
             return text.rstrip()
         return ""
 
     def _get_cold_media(self) -> str:
-        """获取冷门媒体（超过30天无人观看）"""
+        """获取冷门媒体(超过30天无人观看)"""
         thirty_days_ago = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d 00:00:00")
         query = f"""
         SELECT ItemName, ItemType, MAX(DateCreated) as last_play
@@ -813,17 +943,17 @@ class EmbyPlaybackReport(_PluginBase):
         """
         result = self._query_emby(query)
         if result and result.get("results"):
-            text = "❄️ 冷门媒体提醒（>30天无观看）：\n"
+            text = "❄️ 冷门媒体提醒(>30天无观看):\n"
             for item in result["results"]:
                 name = item[0] or "Unknown"
                 item_type = item[1] or ""
                 last_play = item[2] or ""
-                text += f"  · {name} [{item_type}] - 最后观看：{last_play[:10]}\n"
+                text += f"  · {name} [{item_type}] - 最后观看: {last_play[:10]}\n"
             return text.rstrip()
         return ""
 
     def _get_abnormal_users(self, start: datetime, end: datetime) -> str:
-        """获取异常用户告警（基于播放频次）"""
+        """获取异常用户告警(基于播放频次)"""
         query = f"""
         SELECT UserName, COUNT(*) as play_count,
                COUNT(DISTINCT DATE(DateCreated)) as active_days
@@ -836,18 +966,18 @@ class EmbyPlaybackReport(_PluginBase):
         """
         result = self._query_emby(query)
         if result and result.get("results"):
-            text = "⚠️ 异常活跃用户：\n"
+            text = "⚠️ 异常活跃用户:\n"
             for item in result["results"]:
                 username = item[0] or "Unknown"
                 play_count = int(item[1] or 0)
                 active_days = int(item[2] or 0)
                 avg_daily = play_count / active_days if active_days > 0 else 0
-                text += f"  · {username}：{play_count}次播放 (日均{avg_daily:.1f}次)\n"
+                text += f"  · {username}: {play_count}次播放 (日均{avg_daily:.1f}次)\n"
             return text.rstrip()
         return ""
 
     def _get_trend_analysis(self, start: datetime, end: datetime, days: int) -> str:
-        """获取观影趋势分析 (已修复参数数量问题)"""
+        """获取观影趋势分析"""
         query = f"""
         SELECT DATE(DateCreated) as play_date, 
                COUNT(*) as play_count,
@@ -860,7 +990,6 @@ class EmbyPlaybackReport(_PluginBase):
         """
         result = self._query_emby(query)
         if result and result.get("results"):
-            # 这里的计算逻辑已确保类型转换安全
             results_list = result["results"]
             total_count = sum(int(item[1] or 0) for item in results_list)
             total_duration = sum(float(item[2] or 0) for item in results_list)
@@ -869,20 +998,19 @@ class EmbyPlaybackReport(_PluginBase):
             avg_count = total_count / active_days if active_days > 0 else 0
             avg_duration = (total_duration / active_days / 3600) if active_days > 0 else 0
             
-            # 使用 f-string 自动处理类型转换，避免 += int 错误
-            text = "📈 观影趋势分析：\n"
-            text += f"  · 统计周期：{days}天\n"
-            text += f"  · 日均播放：{avg_count:.1f}次\n"
-            text += f"  · 日均时长：{avg_duration:.1f}小时\n"
+            text = "📈 观影趋势分析:\n"
+            text += f"  · 统计周期: {days}天\n"
+            text += f"  · 日均播放: {avg_count:.1f}次\n"
+            text += f"  · 日均时长: {avg_duration:.1f}小时\n"
             
             if results_list:
                 max_day = max(results_list, key=lambda x: int(x[1] or 0))
-                text += f"  · 最活跃日期：{max_day[0]} ({int(max_day[1] or 0)}次)\n"
+                text += f"  · 最活跃日期: {max_day[0]} ({int(max_day[1] or 0)}次)\n"
             return text.rstrip()
         return ""
 
     def _get_time_distribution(self, start: datetime, end: datetime) -> str:
-        """获取观影时段分布 (同步检查拼接逻辑)"""
+        """获取观影时段分布"""
         query = f"""
         SELECT 
             CASE 
@@ -900,13 +1028,12 @@ class EmbyPlaybackReport(_PluginBase):
         """
         result = self._query_emby(query)
         if result and result.get("results"):
-            text = "⏰ 观影时段分布：\n"
+            text = "⏰ 观影时段分布:\n"
             total = sum(int(item[1] or 0) for item in result["results"])
             for item in result["results"]:
                 period = item[0] or "Unknown"
                 count = int(item[1] or 0)
                 percentage = (count / total * 100) if total > 0 else 0
-                # 确保使用 f-string 拼接，防止 int + str 错误
-                text += f"  · {period}：{count}次 ({percentage:.1f}%)\n"
+                text += f"  · {period}: {count}次 ({percentage:.1f}%)\n"
             return text.rstrip()
         return ""
