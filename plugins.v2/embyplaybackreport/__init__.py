@@ -72,22 +72,22 @@ class EmbyPlaybackReport(_PluginBase):
             
             # 每日报告配置
             self._daily_enabled = config.get("daily_enabled", False)
-            self._daily_hour = config.get("daily_hour", 9)
-            self._daily_minute = config.get("daily_minute", 0)
+            self._daily_hour = int(config.get("daily_hour", 9))
+            self._daily_minute = int(config.get("daily_minute", 0))
             self._daily_reports = config.get("daily_reports", [])
             
             # 每周报告配置
             self._weekly_enabled = config.get("weekly_enabled", False)
-            self._weekly_day = config.get("weekly_day", "mon")
-            self._weekly_hour = config.get("weekly_hour", 9)
-            self._weekly_minute = config.get("weekly_minute", 0)
+            self._weekly_day = str(config.get("weekly_day", "mon"))
+            self._weekly_hour = int(config.get("weekly_hour", 9))
+            self._weekly_minute = int(config.get("weekly_minute", 0))
             self._weekly_reports = config.get("weekly_reports", [])
             
             # 每月报告配置
             self._monthly_enabled = config.get("monthly_enabled", False)
-            self._monthly_day = config.get("monthly_day", 1)
-            self._monthly_hour = config.get("monthly_hour", 9)
-            self._monthly_minute = config.get("monthly_minute", 0)
+            self._monthly_day = int(config.get("monthly_day", 1))
+            self._monthly_hour = int(config.get("monthly_hour", 9))
+            self._monthly_minute = int(config.get("monthly_minute", 0))
             self._monthly_reports = config.get("monthly_reports", [])
 
         # 停止现有任务
