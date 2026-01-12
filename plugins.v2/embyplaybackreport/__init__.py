@@ -22,7 +22,7 @@ class EmbyPlaybackReport(_PluginBase):
     # 插件图标
     plugin_icon = "Emby_A.png"
     # 插件版本
-    plugin_version = "0.5"  # 更新版本号
+    plugin_version = "0.4" 
     # 插件作者
     plugin_author = "Vivi"
     # 作者主页
