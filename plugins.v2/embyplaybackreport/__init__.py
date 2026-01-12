@@ -113,29 +113,38 @@ class EmbyPlaybackReport(_PluginBase):
                 # 添加每日报告任务
                 if self._daily_enabled:
                     try:
+                        # 确保类型正确
+                        hour = int(self._daily_hour)
+                        minute = int(self._daily_minute)
+                        
                         self._scheduler.add_job(
                             func=self.report,
                             trigger=CronTrigger(
-                                hour=self._daily_hour,
-                                minute=self._daily_minute,
+                                hour=hour,
+                                minute=minute,
                                 timezone=settings.TZ
                             ),
                             args=["daily"],
                             name="Emby观影报告-每日"
                         )
-                        logger.info(f"每日报告任务已配置: 每天 {self._daily_hour:02d}:{self._daily_minute:02d}")
+                        logger.info(f"每日报告任务已配置: 每天 {hour:02d}:{minute:02d}")
                     except Exception as err:
                         logger.error(f"每日报告定时任务配置错误: {err}")
 
                 # 添加每周报告任务
                 if self._weekly_enabled:
                     try:
+                        # 确保类型正确
+                        day = str(self._weekly_day)
+                        hour = int(self._weekly_hour)
+                        minute = int(self._weekly_minute)
+                        
                         self._scheduler.add_job(
                             func=self.report,
                             trigger=CronTrigger(
-                                day_of_week=self._weekly_day,
-                                hour=self._weekly_hour,
-                                minute=self._weekly_minute,
+                                day_of_week=day,
+                                hour=hour,
+                                minute=minute,
                                 timezone=settings.TZ
                             ),
                             args=["weekly"],
@@ -144,26 +153,31 @@ class EmbyPlaybackReport(_PluginBase):
                         day_name = {
                             'mon': '周一', 'tue': '周二', 'wed': '周三', 
                             'thu': '周四', 'fri': '周五', 'sat': '周六', 'sun': '周日'
-                        }.get(self._weekly_day, self._weekly_day)
-                        logger.info(f"每周报告任务已配置: 每{day_name} {self._weekly_hour:02d}:{self._weekly_minute:02d}")
+                        }.get(day, day)
+                        logger.info(f"每周报告任务已配置: 每{day_name} {hour:02d}:{minute:02d}")
                     except Exception as err:
                         logger.error(f"每周报告定时任务配置错误: {err}")
 
                 # 添加每月报告任务
                 if self._monthly_enabled:
                     try:
+                        # 确保类型正确
+                        day = int(self._monthly_day)
+                        hour = int(self._monthly_hour)
+                        minute = int(self._monthly_minute)
+                        
                         self._scheduler.add_job(
                             func=self.report,
                             trigger=CronTrigger(
-                                day=self._monthly_day,
-                                hour=self._monthly_hour,
-                                minute=self._monthly_minute,
+                                day=day,
+                                hour=hour,
+                                minute=minute,
                                 timezone=settings.TZ
                             ),
                             args=["monthly"],
                             name="Emby观影报告-每月"
                         )
-                        logger.info(f"每月报告任务已配置: 每月{self._monthly_day}号 {self._monthly_hour:02d}:{self._monthly_minute:02d}")
+                        logger.info(f"每月报告任务已配置: 每月{day}号 {hour:02d}:{minute:02d}")
                     except Exception as err:
                         logger.error(f"每月报告定时任务配置错误: {err}")
 
