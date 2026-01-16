@@ -603,6 +603,7 @@ class DoubanHaixiangkan(_PluginBase):
         
         return user_dict
 
+
     def __get_daily_stats(self) -> Dict[str, Dict[str, int]]:
         """
         获取每日统计数据
@@ -917,7 +918,7 @@ class DoubanHaixiangkan(_PluginBase):
                                             # 发送下载通知
                                             if self._notify:
                                                 self.post_message(
-                                                    mtype=NotificationType.Manual,
+                                                    mtype=NotificationType.Plugin,
                                                     title=f"{username} 想看{mediainfo.type.value} {mediainfo.title_year}，已添加订阅，等待入库。",
                                                     text=f"来自豆瓣还想看同步",
                                                     image=mediainfo.get_poster_image()
@@ -947,7 +948,7 @@ class DoubanHaixiangkan(_PluginBase):
                                             # 发送下载通知
                                             if self._notify:
                                                 self.post_message(
-                                                    mtype=NotificationType.Manual,
+                                                    mtype=NotificationType.Plugin,
                                                     title=f"{username} 订阅了{mediainfo.type.value} {mediainfo.title_year}，等待入库。",
                                                     text=f"来自豆瓣还想看同步",
                                                     image=mediainfo.get_poster_image()
@@ -965,7 +966,7 @@ class DoubanHaixiangkan(_PluginBase):
                             # 发送订阅通知
                             if action == "subscribe" and self._notify:
                                 self.post_message(
-                                    mtype=NotificationType.Manual,
+                                    mtype=NotificationType.Plugin,
                                     title=f"{username} 订阅了{mediainfo.type.value} {mediainfo.title_year}",
                                     text=f"年份：{mediainfo.year}\n简介：{mediainfo.overview[:100] if mediainfo.overview else '暂无'}",
                                     image=mediainfo.get_poster_image()
@@ -1026,11 +1027,13 @@ class DoubanHaixiangkan(_PluginBase):
                 return
 
             logger.info("收到命令，开始执行豆瓣想看同步 ...")
-            self.post_message(channel=event.event_data.get("channel"),
+            self.post_message(mtype=NotificationType.Plugin,
+                              channel=event.event_data.get("channel"),
                               title="开始同步豆瓣想看 ...",
                               userid=event.event_data.get("user"))
         self.sync()
 
         if event:
-            self.post_message(channel=event.event_data.get("channel"),
+            self.post_message(mtype=NotificationType.Plugin,
+                              channel=event.event_data.get("channel"),
                               title="同步豆瓣想看数据完成！", userid=event.event_data.get("user"))
