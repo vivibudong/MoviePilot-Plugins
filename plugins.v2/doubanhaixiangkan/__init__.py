@@ -83,6 +83,14 @@ class DoubanHaixiangkan(_PluginBase):
             self._search_download = config.get("search_download")
             self._request_interval = config.get("request_interval", 3)
 
+        if self._clear:
+            self.save_data('history', [])
+            self.save_data('daily_stats', {})
+            logger.info("已清理豆瓣想看历史记录与统计数据")
+            self._clear = False
+            self._clearflag = False
+            self.__update_config()
+
         if self._enabled or self._onlyonce:
             if self._onlyonce:
                 self._scheduler = BackgroundScheduler(timezone=settings.TZ)
@@ -97,19 +105,9 @@ class DoubanHaixiangkan(_PluginBase):
                     self._scheduler.print_jobs()
                     self._scheduler.start()
 
-            if self._onlyonce or self._clear:
+            if self._onlyonce:
                 # 关闭一次性开关
                 self._onlyonce = False
-                # 记录缓存清理标志
-                self._clearflag = self._clear
-                # 关闭清理缓存
-                self._clear = False
-                # 立即清理历史与统计数据
-                if self._clearflag:
-                    self.save_data('history', [])
-                    self.save_data('daily_stats', {})
-                    logger.info("已清理豆瓣想看历史记录与统计数据")
-                    self._clearflag = False
                 # 保存配置
                 self.__update_config()
 
