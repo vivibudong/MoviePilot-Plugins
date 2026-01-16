@@ -621,9 +621,20 @@ class DoubanHaixiangkan(_PluginBase):
         """
         self.save_data('daily_stats', stats)
 
-    def __check_and_update_daily_limit(self, username: str, daily_limit: int) -> bool:
+    def __get_clean_daily_stats(self) -> Dict[str, Dict[str, int]]:
         """
-        检查并更新每日限额
+        获取并清理过期的每日统计数据（保留最近7天）
+        """
+        stats = self.__get_daily_stats()
+        current_date = datetime.datetime.now()
+        return {
+            date: users for date, users in stats.items()
+            if (current_date - datetime.datetime.strptime(date, "%Y-%m-%d")).days <= 7
+        }
+
+    def __can_process_today(self, username: str, daily_limit: int) -> bool:
+        """
+        检查每日限额
         :param username: 用户名
         :param daily_limit: 每日限额（-1表示不限制，0表示不处理，>0表示限制数量）
         :return: True表示可以处理，False表示已达限额
@@ -639,15 +650,8 @@ class DoubanHaixiangkan(_PluginBase):
         # 获取今天的日期
         today = datetime.datetime.now().strftime("%Y-%m-%d")
         
-        # 获取统计数据
-        stats = self.__get_daily_stats()
-        
-        # 清理过期数据（保留最近7天）
-        current_date = datetime.datetime.now()
-        stats = {
-            date: users for date, users in stats.items()
-            if (current_date - datetime.datetime.strptime(date, "%Y-%m-%d")).days <= 7
-        }
+        # 获取并清理统计数据
+        stats = self.__get_clean_daily_stats()
         
         # 获取今天的统计
         today_stats = stats.get(today, {})
@@ -658,13 +662,25 @@ class DoubanHaixiangkan(_PluginBase):
             logger.info(f"用户 {username} 今日已处理 {current_count}/{daily_limit} 部，已达限额")
             return False
         
-        # 更新计数
-        today_stats[username] = current_count + 1
+        return True
+
+    def __increment_daily_count(self, username: str, daily_limit: int):
+        """
+        成功处理后更新每日计数
+        """
+        if daily_limit <= 0:
+            return
+        if daily_limit == -1:
+            return
+
+        # 获取并清理统计数据
+        stats = self.__get_clean_daily_stats()
+        today = datetime.datetime.now().strftime("%Y-%m-%d")
+        today_stats = stats.get(today, {})
+        today_stats[username] = today_stats.get(username, 0) + 1
         stats[today] = today_stats
         self.__save_daily_stats(stats)
-        
         logger.info(f"用户 {username} 今日已处理 {today_stats[username]}/{daily_limit} 部")
-        return True
 
     def __fetch_rss_with_retry(self, url: str, max_retries: int = 3) -> Optional[List]:
         """
@@ -833,7 +849,7 @@ class DoubanHaixiangkan(_PluginBase):
                                 continue
 
                         # 检查每日限额
-                        if not self.__check_and_update_daily_limit(username, daily_limit):
+                        if not self.__can_process_today(username, daily_limit):
                             logger.info(f'用户 {username} 今日已达限额，跳过后续处理')
                             break  # 跳出当前用户的循环
 
@@ -844,14 +860,21 @@ class DoubanHaixiangkan(_PluginBase):
                         if settings.RECOGNIZE_SOURCE == "themoviedb":
                             tmdbinfo = mediachain.get_tmdbinfo_by_doubanid(doubanid=doubanid_item, mtype=meta.type)
                             if not tmdbinfo:
-                                logger.warn(f'未能通过豆瓣ID {doubanid_item} 获取到TMDB信息，标题：{title}，豆瓣ID：{doubanid_item}')
-                                total_errors += 1
-                                continue
-                            mediainfo = self.chain.recognize_media(meta=meta, tmdbid=tmdbinfo.get("id"))
-                            if not mediainfo:
-                                logger.warn(f'TMDBID {tmdbinfo.get("id")} 未识别到媒体信息')
-                                total_errors += 1
-                                continue
+                                logger.warn(f'未能通过豆瓣ID {doubanid_item} 获取到TMDB信息，标题：{title}，豆瓣ID：{doubanid_item}，尝试回退豆瓣识别')
+                                mediainfo = self.chain.recognize_media(meta=meta, doubanid=doubanid_item)
+                                if not mediainfo:
+                                    logger.warn(f'回退豆瓣识别失败，豆瓣ID：{doubanid_item}')
+                                    total_errors += 1
+                                    continue
+                            else:
+                                mediainfo = self.chain.recognize_media(meta=meta, tmdbid=tmdbinfo.get("id"))
+                                if not mediainfo:
+                                    logger.warn(f'TMDBID {tmdbinfo.get("id")} 未识别到媒体信息，尝试回退豆瓣识别')
+                                    mediainfo = self.chain.recognize_media(meta=meta, doubanid=doubanid_item)
+                                    if not mediainfo:
+                                        logger.warn(f'回退豆瓣识别失败，豆瓣ID：{doubanid_item}')
+                                        total_errors += 1
+                                        continue
                         else:
                             mediainfo = self.chain.recognize_media(meta=meta, doubanid=doubanid_item)
                             if not mediainfo:
@@ -950,6 +973,8 @@ class DoubanHaixiangkan(_PluginBase):
                             
                             total_processed += 1
                             user_processed += 1
+                            # 成功处理后更新每日计数
+                            self.__increment_daily_count(username, daily_limit)
                         
                         # 存储历史记录
                         history.append({
