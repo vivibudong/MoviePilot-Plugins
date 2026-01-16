@@ -923,7 +923,7 @@ class DoubanHaixiangkan(_PluginBase):
                                             if self._notify:
                                                 self.post_message(
                                                     mtype=NotificationType.Plugin,
-                                                    title=f"{username} 想看{mediainfo.type.value} {mediainfo.title_year}，已添加订阅，等待入库。",
+                                                    title=f"{username} 想看{mediainfo.type.value} {mediainfo.title_year}，已开始下载，等待入库。",
                                                     text=f"来自豆瓣还想看同步",
                                                     image=mediainfo.get_poster_image()
                                                 )
@@ -953,7 +953,7 @@ class DoubanHaixiangkan(_PluginBase):
                                             if self._notify:
                                                 self.post_message(
                                                     mtype=NotificationType.Plugin,
-                                                    title=f"{username} 订阅了{mediainfo.type.value} {mediainfo.title_year}，等待入库。",
+                                                    title=f"{username} 想看{mediainfo.type.value} {mediainfo.title_year}，开始下载，等待入库。",
                                                     text=f"来自豆瓣还想看同步",
                                                     image=mediainfo.get_poster_image()
                                                 )
@@ -971,7 +971,7 @@ class DoubanHaixiangkan(_PluginBase):
                             if action == "subscribe" and self._notify:
                                 self.post_message(
                                     mtype=NotificationType.Plugin,
-                                    title=f"{username} 订阅了{mediainfo.type.value} {mediainfo.title_year}",
+                                    title=f"{username} 订阅了 {mediainfo.type.value} {mediainfo.title_year} ，但未搜索到资源，一旦搜索到资源我们会尽快入库",
                                     text=f"年份：{mediainfo.year}\n简介：{mediainfo.overview[:100] if mediainfo.overview else '暂无'}",
                                     image=mediainfo.get_poster_image()
                                 )
