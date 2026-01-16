@@ -104,6 +104,12 @@ class DoubanHaixiangkan(_PluginBase):
                 self._clearflag = self._clear
                 # 关闭清理缓存
                 self._clear = False
+                # 立即清理历史与统计数据
+                if self._clearflag:
+                    self.save_data('history', [])
+                    self.save_data('daily_stats', {})
+                    logger.info("已清理豆瓣想看历史记录与统计数据")
+                    self._clearflag = False
                 # 保存配置
                 self.__update_config()
 
